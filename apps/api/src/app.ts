@@ -16,7 +16,10 @@ import {
   InMemoryJobQueue,
   InMemoryRealtimeFanout,
   isComposioEnabled,
+  isMcpEnabled,
   LocalAgentHomeStore,
+  McpClient,
+  parseMcpConfig,
   PiAgentRuntime,
   PiOAuthLogins,
   PostgresRealtimeFanout,
@@ -80,10 +83,18 @@ export async function createApp(
   const oauthLogins = new PiOAuthLogins();
   const home = new LocalAgentHomeStore(env.dataDir);
   const memory = new MarkdownMemoryStore(prisma);
-  const stack = createConnectorStack(isComposioEnabled(env.composioApiKey));
+  const mcpConfig = parseMcpConfig({
+    MCP_CONFIG_PATH: env.mcpConfigPath,
+    MCP_SERVERS: env.mcpServers,
+  });
+  const mcpClient = isMcpEnabled(mcpConfig) ? new McpClient(mcpConfig) : undefined;
+  const stack = createConnectorStack(isComposioEnabled(env.composioApiKey), mcpClient);
   const connector = stack.destination;
   await connector.start();
   void stack.composio?.warmDirectory().catch(() => undefined);
+  void mcpClient?.initialize().catch((error) => {
+    console.error("[MCP] Initialization failed:", error);
+  });
   const runtime =
     env.agentRuntime === "scripted" ? new ScriptedAgentRuntime() : new PiAgentRuntime();
   const notifications = new ExpoPushProvider(env.dataDir);
@@ -211,6 +222,7 @@ export async function createApp(
       runtime: env.agentRuntime,
       sandbox: env.sandboxProvider,
       composio: Boolean(stack.composio),
+      mcp: Boolean(mcpClient),
       jobs: jobKind,
       realtime: realtime.describe().id,
     }),
@@ -230,6 +242,7 @@ export async function createApp(
       await jobs.close();
       await realtime.close();
       await connector.stop();
+      await mcpClient?.close().catch(() => undefined);
       await prisma.$disconnect().catch(() => undefined);
       await created.pool?.end().catch(() => undefined);
     },

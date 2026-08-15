@@ -34,7 +34,10 @@ import {
   GraphileJobWorkerHost,
   InMemoryJobQueue,
   isComposioEnabled,
+  isMcpEnabled,
   LocalAgentHomeStore,
+  McpClient,
+  parseMcpConfig,
   PiAgentRuntime,
   PostgresRealtimeFanout,
   ScriptedAgentRuntime,
@@ -61,9 +64,17 @@ async function main() {
     dataDir,
     prisma,
   });
-  const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY));
+  const mcpConfig = parseMcpConfig({
+    MCP_CONFIG_PATH: process.env.MCP_CONFIG_PATH,
+    MCP_SERVERS: process.env.MCP_SERVERS,
+  });
+  const mcpClient = isMcpEnabled(mcpConfig) ? new McpClient(mcpConfig) : undefined;
+  const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY), mcpClient);
   const connector = stack.destination;
   await connector.start();
+  void mcpClient?.initialize().catch((error) => {
+    console.error("[MCP] Initialization failed:", error);
+  });
   const secrets = new EncryptedSecretStore(resolveEncryptionKey(process.env));
   const home = new LocalAgentHomeStore(dataDir);
   const inMemoryJobs = process.env.WAKEUP_DRIVER === "memory" ? new InMemoryJobQueue() : undefined;
