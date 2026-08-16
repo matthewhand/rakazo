@@ -7,7 +7,7 @@ interface McpServer extends McpServerConfig {
   status?: McpServerStatus;
 }
 
-export function McpServersTab() {
+export function McpSettingsPage({ onClose }: { onClose: () => void }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [statuses, setStatuses] = useState<Map<string, McpServerStatus>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -77,7 +77,7 @@ export function McpServersTab() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center py-12">
+      <div className="flex h-full items-center justify-center">
         <div className="text-[#7A7A80]">Loading MCP servers...</div>
       </div>
     );
@@ -85,36 +85,55 @@ export function McpServersTab() {
 
   if (editingIndex !== null) {
     return (
-      <div className="flex-1 overflow-y-auto px-8 py-6">
-        <McpServerEditor
-          server={editingIndex === "new" ? undefined : servers[editingIndex]}
-          onSave={(server) => {
-            const newServers =
-              editingIndex === "new"
-                ? [...servers, server]
-                : servers.map((s, i) => (i === editingIndex ? server : s));
-            void saveServers(newServers);
-          }}
-          onCancel={() => setEditingIndex(null)}
-          saving={saving}
-        />
-      </div>
+      <McpServerEditor
+        server={editingIndex === "new" ? undefined : servers[editingIndex]}
+        onSave={(server) => {
+          const newServers =
+            editingIndex === "new"
+              ? [...servers, server]
+              : servers.map((s, i) => (i === editingIndex ? server : s));
+          void saveServers(newServers);
+        }}
+        onCancel={() => setEditingIndex(null)}
+        saving={saving}
+      />
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div className="flex h-full flex-col bg-[#0A0A0B]">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-[#1C1C1E] px-8 py-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#F1F1F2]">MCP Servers</h1>
+          <p className="mt-1 text-sm text-[#7A7A80]">
+            Connect remote tools and APIs without requiring Composio
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[#7A7A80] hover:text-[#ECECEE] transition-colors"
+          aria-label="Close"
+        >
+          <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
       {/* Error banner */}
       {error && (
-        <div className="mb-4 rounded-lg bg-[#C94244]/10 border border-[#C94244]/20 px-4 py-3">
+        <div className="mx-8 mt-4 rounded-lg bg-[#C94244]/10 border border-[#C94244]/20 px-4 py-3">
           <p className="text-sm text-[#C94244]">{error}</p>
         </div>
       )}
 
-      {servers.length === 0 ? (
-        <EmptyState onAddServer={() => setEditingIndex("new")} />
-      ) : (
-        <>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto px-8 py-6">
+        {servers.length === 0 ? (
+          <EmptyState onAddServer={() => setEditingIndex("new")} />
+        ) : (
           <div className="space-y-3">
             {servers.map((server, index) => {
               const status = statuses.get(server.name);
@@ -131,7 +150,9 @@ export function McpServersTab() {
               );
             })}
           </div>
+        )}
 
+        {servers.length > 0 && (
           <button
             type="button"
             onClick={() => setEditingIndex("new")}
@@ -143,19 +164,19 @@ export function McpServersTab() {
             </svg>
             Add Another Server
           </button>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
 function EmptyState({ onAddServer }: { onAddServer: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center py-12 text-center">
-      <div className="mb-4 rounded-full bg-[#1C1C1E] p-5">
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      <div className="mb-6 rounded-full bg-[#1C1C1E] p-6">
         <svg
-          width="40"
-          height="40"
+          width="48"
+          height="48"
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
@@ -166,36 +187,36 @@ function EmptyState({ onAddServer }: { onAddServer: () => void }) {
           <path d="M18 12h2a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2v-7a2 2 0 012-2h2" />
         </svg>
       </div>
-      <h3 className="text-base font-medium text-[#F1F1F2] mb-2">No MCP Servers Configured</h3>
-      <p className="text-sm text-[#7A7A80] max-w-md mb-4">
-        Model Context Protocol servers provide tools and capabilities to your bots. Connect to
-        services like Notion, file systems, databases, or custom APIs.
+      <h3 className="text-lg font-medium text-[#F1F1F2] mb-2">No MCP Servers Configured</h3>
+      <p className="text-sm text-[#7A7A80] max-w-md mb-6">
+        Model Context Protocol (MCP) servers provide tools and capabilities to your bots. Connect
+        to services like Notion, file systems, databases, or custom APIs.
       </p>
-      <Button type="button" variant="pill" size="sm" onClick={onAddServer}>
+      <Button type="button" variant="pill" onClick={onAddServer}>
         <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" className="mr-2">
           <path d="M8 3v10m-5-5h10" />
         </svg>
         Add Your First Server
       </Button>
-      <div className="mt-6 text-left max-w-md">
-        <p className="text-xs font-medium text-[#7A7A80] mb-2">Popular examples:</p>
-        <div className="space-y-1.5 text-xs text-[#6C6C70]">
+      <div className="mt-8 text-left max-w-md">
+        <p className="text-xs font-medium text-[#7A7A80] mb-3">Popular examples:</p>
+        <div className="space-y-2 text-xs text-[#6C6C70]">
           <div className="flex items-start gap-2">
             <span className="text-[#7A7A80]">•</span>
             <span>
-              <strong className="text-[#ECECEE]">Notion</strong> - Read and write pages
+              <strong className="text-[#ECECEE]">Notion</strong> - Read and write pages, databases
             </span>
           </div>
           <div className="flex items-start gap-2">
             <span className="text-[#7A7A80]">•</span>
             <span>
-              <strong className="text-[#ECECEE]">Filesystem</strong> - Access local files
+              <strong className="text-[#ECECEE]">Filesystem</strong> - Access local files and directories
             </span>
           </div>
           <div className="flex items-start gap-2">
             <span className="text-[#7A7A80]">•</span>
             <span>
-              <strong className="text-[#ECECEE]">APIs.guru</strong> - Discover public APIs
+              <strong className="text-[#ECECEE]">APIs.guru</strong> - Discover and use public APIs
             </span>
           </div>
         </div>
@@ -433,22 +454,21 @@ function McpServerEditor({
   }
 
   return (
-    <div className="max-w-2xl">
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold text-[#F1F1F2]">
+    <div className="flex h-full flex-col bg-[#0A0A0B]">
+      <div className="border-b border-[#1C1C1E] px-8 py-6">
+        <h2 className="text-xl font-semibold text-[#F1F1F2]">
           {server ? "Edit Server" : "Add Server"}
-        </h3>
-        <p className="text-sm text-[#7A7A80] mt-1">
-          Configure a Model Context Protocol server
-        </p>
+        </h2>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-8 py-6">
         {error && (
-          <div className="rounded-lg bg-[#C94244]/10 border border-[#C94244]/20 px-4 py-3">
+          <div className="mb-6 rounded-lg bg-[#C94244]/10 border border-[#C94244]/20 px-4 py-3">
             <p className="text-sm text-[#C94244]">{error}</p>
           </div>
         )}
+
+        <div className="space-y-6 max-w-2xl">
           <div>
             <label className="block text-sm font-medium text-[#ECECEE] mb-2">
               Server Name
@@ -575,8 +595,8 @@ function McpServerEditor({
           )}
         </div>
 
-        <div className="flex gap-3 pt-4 border-t border-[#26262A]">
-          <Button type="submit" variant="pill" size="sm" disabled={saving}>
+        <div className="mt-8 flex gap-3 pt-6 border-t border-[#1C1C1E]">
+          <Button type="submit" variant="pill" disabled={saving}>
             {saving ? "Saving..." : "Save Server"}
           </Button>
           <button
