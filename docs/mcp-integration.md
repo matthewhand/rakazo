@@ -13,10 +13,36 @@ MCP servers provide tools that your Rakazo bots can use. Common examples include
 ## Configuration
 
 MCP servers can be configured via:
-1. **Environment variable** (`MCP_SERVERS`) – JSON array of server configs
-2. **Config file** (`MCP_CONFIG_PATH`) – Path to a JSON config file
+1. **Web UI** (recommended) – Graphical interface in the Rakazo settings
+2. **Database** – Stored in the deployment settings (managed via UI or API)
+3. **Environment variable** (`MCP_SERVERS`) – JSON array of server configs
+4. **Config file** (`MCP_CONFIG_PATH`) – Path to a JSON config file
 
-### Option 1: Environment Variable
+Configurations from all sources are merged. Database and UI configurations are loaded alongside environment and file-based settings.
+
+### Option 1: Web UI (Recommended)
+
+The easiest way to configure MCP servers is through the web interface:
+
+1. Open Rakazo web UI (default: `http://localhost:5173`)
+2. Navigate to **Settings** → **Plugins**
+3. Click the **MCP Servers** tab
+4. Click **Add Server**
+5. Fill in the server details:
+   - **Name**: Unique identifier (e.g., "notion", "filesystem")
+   - **Transport Type**: Choose HTTP, SSE, or stdio
+   - **URL** (HTTP/SSE) or **Command** (stdio)
+   - **Optional**: Headers, environment variables, arguments
+6. Click **Save**
+
+The server will be stored in the database and automatically loaded on restart. You can:
+- **Edit** existing servers
+- **Enable/Disable** servers without deleting them
+- **Delete** servers you no longer need
+
+Changes take effect after restarting the Rakazo services.
+
+### Option 2: Environment Variable
 
 Set `MCP_SERVERS` to a JSON array of server configurations:
 
@@ -75,6 +101,12 @@ MCP_CONFIG_PATH=/path/to/mcp.json
 
 ## Server Configuration Fields
 
+All server configurations support these common fields:
+
+- **name** (required) – Unique identifier for the server
+- **type** (required) – Transport type: `"stdio"`, `"sse"`, or `"http"`
+- **disabled** (optional) – Set to `true` to disable without deleting
+
 ### Stdio Servers
 
 ```json
@@ -120,6 +152,37 @@ MCP tools are namespaced by server name. For example:
 - Server `"filesystem"` with tool `"read_file"` becomes `filesystem.read_file`
 
 Bots automatically discover and use these tools.
+
+## API Management
+
+For programmatic configuration, use the RPC API endpoints:
+
+### List MCP Servers
+
+```typescript
+const servers = await rpc.mcp.list();
+// Returns: { servers: McpServerConfig[] }
+```
+
+### Update MCP Servers
+
+```typescript
+await rpc.mcp.update({
+  servers: [
+    {
+      name: "notion",
+      type: "http",
+      url: "http://localhost:3000",
+      headers: {
+        "Authorization": "Bearer token"
+      }
+    }
+  ]
+});
+// Returns: { ok: true }
+```
+
+**Note**: Only deployment owners can update MCP server configurations via the API.
 
 ## Example: Notion MCP Server
 
