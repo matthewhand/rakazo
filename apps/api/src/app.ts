@@ -83,10 +83,13 @@ export async function createApp(
   const oauthLogins = new PiOAuthLogins();
   const home = new LocalAgentHomeStore(env.dataDir);
   const memory = new MarkdownMemoryStore(prisma);
-  const mcpConfig = parseMcpConfig({
-    MCP_CONFIG_PATH: env.mcpConfigPath,
-    MCP_SERVERS: env.mcpServers,
-  });
+  const mcpConfig = await parseMcpConfig(
+    {
+      MCP_CONFIG_PATH: env.mcpConfigPath,
+      MCP_SERVERS: env.mcpServers,
+    },
+    prisma,
+  );
   const mcpClient = isMcpEnabled(mcpConfig) ? new McpClient(mcpConfig) : undefined;
   const stack = createConnectorStack(isComposioEnabled(env.composioApiKey), mcpClient);
   const connector = stack.destination;

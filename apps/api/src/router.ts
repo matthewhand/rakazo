@@ -1087,6 +1087,38 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
     },
+    mcp: {
+      list: authed.mcp.list.handler(async ({ context }) => {
+        const settings = await deps.prisma.deploymentSettings.findUnique({
+          where: { id: "default" },
+          select: { mcpServers: true },
+        });
+        if (!settings?.mcpServers) {
+          return { servers: [] };
+        }
+        try {
+          const parsed = JSON.parse(settings.mcpServers);
+          return { servers: Array.isArray(parsed) ? parsed : [] };
+        } catch {
+          return { servers: [] };
+        }
+      }),
+      update: authed.mcp.update.handler(async ({ context, input }) => {
+        if (!context.actor.isDeploymentOwner) {
+          throw new ORPCError({
+            code: "FORBIDDEN",
+            message: "Only deployment owner can update MCP servers",
+          });
+        }
+        const serialized = JSON.stringify(input.servers);
+        await deps.prisma.deploymentSettings.upsert({
+          where: { id: "default" },
+          create: { id: "default", mcpServers: serialized },
+          update: { mcpServers: serialized },
+        });
+        return { ok: true as const };
+      }),
+    },
   });
 }
 

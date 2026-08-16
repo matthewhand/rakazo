@@ -33,10 +33,10 @@ interface McpClientConnection {
 export class McpClient implements ConnectorProvider {
   private connections = new Map<string, McpClientConnection>();
   private initPromise: Promise<void> | undefined;
-  private readonly config: McpClientConfig;
+  private readonly configPromise: Promise<McpClientConfig>;
 
-  constructor(config: McpClientConfig) {
-    this.config = config;
+  constructor(config: McpClientConfig | Promise<McpClientConfig>) {
+    this.configPromise = Promise.resolve(config);
   }
 
   describe() {
@@ -55,7 +55,8 @@ export class McpClient implements ConnectorProvider {
   }
 
   private async doInitialize(): Promise<void> {
-    const initPromises = this.config.servers.map(async (serverConfig) => {
+    const config = await this.configPromise;
+    const initPromises = config.servers.map(async (serverConfig) => {
       try {
         await this.connectServer(serverConfig);
       } catch (error) {
@@ -226,7 +227,17 @@ export class McpClient implements ConnectorProvider {
   }
 }
 
-export function parseMcpConfig(envVars: Record<string, string | undefined>): McpClientConfig {
+export function parseMcpConfig(
+  envVars: Record<string, string | undefined>,
+  prisma?: { deploymentSettings: { findUnique: (args: unknown) => Promise<{ mcpServers: string | null } | null> } },
+): McpClientConfig | Promise<McpClientConfig> {
+  if (prisma) {
+    return parseMcpConfigAsync(envVars, prisma);
+  }
+  return parseMcpConfigSync(envVars);
+}
+
+function parseMcpConfigSync(envVars: Record<string, string | undefined>): McpClientConfig {
   const servers: McpServerConfig[] = [];
 
   const mcpConfigPath = envVars.MCP_CONFIG_PATH;
@@ -264,6 +275,67 @@ export function parseMcpConfig(envVars: Record<string, string | undefined>): Mcp
   return { servers };
 }
 
-export function isMcpEnabled(config: McpClientConfig): boolean {
+async function parseMcpConfigAsync(
+  envVars: Record<string, string | undefined>,
+  prisma: { deploymentSettings: { findUnique: (args: unknown) => Promise<{ mcpServers: string | null } | null> } },
+): Promise<McpClientConfig> {
+  const servers: McpServerConfig[] = [];
+
+  const mcpConfigPath = envVars.MCP_CONFIG_PATH;
+  if (mcpConfigPath) {
+    try {
+      const fs = require("node:fs");
+      const configContent = fs.readFileSync(mcpConfigPath, "utf-8");
+      const config = JSON.parse(configContent);
+      if (config.mcpServers && Array.isArray(config.mcpServers)) {
+        servers.push(...config.mcpServers);
+      }
+    } catch (error) {
+      console.error(
+        `[MCP] Failed to load config from ${mcpConfigPath}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  const mcpServersEnv = envVars.MCP_SERVERS;
+  if (mcpServersEnv) {
+    try {
+      const envServers = JSON.parse(mcpServersEnv);
+      if (Array.isArray(envServers)) {
+        servers.push(...envServers);
+      }
+    } catch (error) {
+      console.error(
+        "[MCP] Failed to parse MCP_SERVERS env var:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  try {
+    const settings = await prisma.deploymentSettings.findUnique({
+      where: { id: "default" },
+    });
+    if (settings?.mcpServers) {
+      const dbServers = JSON.parse(settings.mcpServers);
+      if (Array.isArray(dbServers)) {
+        servers.push(...dbServers.filter((s) => !s.disabled));
+      }
+    }
+  } catch (error) {
+    console.error(
+      "[MCP] Failed to load servers from database:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  return { servers };
+}
+
+export function isMcpEnabled(config: McpClientConfig | Promise<McpClientConfig>): boolean {
+  if (config instanceof Promise) {
+    return true;
+  }
   return config.servers.length > 0;
 }

@@ -180,6 +180,63 @@ describe("parseMcpConfig", () => {
     const config = parseMcpConfig({ MCP_SERVERS: "not json" });
     expect(config.servers).toHaveLength(0);
   });
+
+  it("should load servers from database when prisma is provided", async () => {
+    const mockPrisma = {
+      deploymentSettings: {
+        findUnique: async () => ({
+          mcpServers: JSON.stringify([
+            { name: "db-server", type: "http", url: "http://db:3000" },
+          ]),
+        }),
+      },
+    };
+
+    const config = await parseMcpConfig({}, mockPrisma as never);
+    expect(config.servers).toHaveLength(1);
+    expect(config.servers[0]?.name).toBe("db-server");
+  });
+
+  it("should filter disabled servers from database", async () => {
+    const mockPrisma = {
+      deploymentSettings: {
+        findUnique: async () => ({
+          mcpServers: JSON.stringify([
+            { name: "enabled", type: "http", url: "http://enabled:3000" },
+            { name: "disabled", type: "http", url: "http://disabled:3000", disabled: true },
+          ]),
+        }),
+      },
+    };
+
+    const config = await parseMcpConfig({}, mockPrisma as never);
+    expect(config.servers).toHaveLength(1);
+    expect(config.servers[0]?.name).toBe("enabled");
+  });
+
+  it("should merge env and database servers", async () => {
+    const mockPrisma = {
+      deploymentSettings: {
+        findUnique: async () => ({
+          mcpServers: JSON.stringify([
+            { name: "db-server", type: "http", url: "http://db:3000" },
+          ]),
+        }),
+      },
+    };
+
+    const config = await parseMcpConfig(
+      {
+        MCP_SERVERS: JSON.stringify([
+          { name: "env-server", type: "http", url: "http://env:3000" },
+        ]),
+      },
+      mockPrisma as never,
+    );
+    expect(config.servers).toHaveLength(2);
+    expect(config.servers[0]?.name).toBe("env-server");
+    expect(config.servers[1]?.name).toBe("db-server");
+  });
 });
 
 describe("isMcpEnabled", () => {
@@ -193,5 +250,10 @@ describe("isMcpEnabled", () => {
   it("should return false when no servers configured", () => {
     const config: McpClientConfig = { servers: [] };
     expect(isMcpEnabled(config)).toBe(false);
+  });
+
+  it("should return true when config is a promise", () => {
+    const config = Promise.resolve({ servers: [] });
+    expect(isMcpEnabled(config)).toBe(true);
   });
 });

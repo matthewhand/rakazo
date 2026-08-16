@@ -11,6 +11,8 @@ import {
   CreateRoutineInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  McpServerConfigSchema,
+  McpServersListSchema,
   MemoryDocumentSchema,
   MeSchema,
   ModelCredentialSchema,
@@ -220,6 +222,10 @@ export const appContract = {
   },
   export: {
     bot: oc.input(botId).output(ExportManifestSchema),
+  },
+  mcp: {
+    list: oc.output(McpServersListSchema),
+    update: oc.input(McpServersListSchema).output(z.object({ ok: z.literal(true) })),
   },
   notifications: {
     registerPush: oc

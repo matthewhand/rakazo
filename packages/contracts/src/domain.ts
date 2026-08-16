@@ -182,6 +182,23 @@ export const DeploymentSettingsSchema = z.object({
   canChooseHostComputer: z.boolean(),
 });
 
+export const McpServerConfigSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(["stdio", "sse", "http"]),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  url: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  disabled: z.boolean().optional(),
+});
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
+export const McpServersListSchema = z.object({
+  servers: z.array(McpServerConfigSchema),
+});
+export type McpServersList = z.infer<typeof McpServersListSchema>;
+
 export const MeSchema = z.object({
   userId: Id,
   email: z.string().email(),
