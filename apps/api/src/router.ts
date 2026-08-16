@@ -84,6 +84,7 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   composio?: ComposioConnector;
+  mcpClient?: { getServerStatus(): Promise<Array<{ name: string; status: string; toolCount: number; error?: string }>> };
   dataDir: string;
   env: {
     defaultProvider: string;
@@ -1117,6 +1118,18 @@ export function createRouter(deps: RouterDeps) {
           update: { mcpServers: serialized },
         });
         return { ok: true as const };
+      }),
+      status: authed.mcp.status.handler(async ({ context }) => {
+        if (!deps.mcpClient) {
+          return { servers: [] };
+        }
+        try {
+          const statuses = await deps.mcpClient.getServerStatus();
+          return { servers: statuses };
+        } catch (error) {
+          console.error("[MCP] Failed to get server status:", error);
+          return { servers: [] };
+        }
       }),
     },
   });

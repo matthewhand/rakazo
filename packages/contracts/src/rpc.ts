@@ -13,6 +13,7 @@ import {
   ExportManifestSchema,
   McpServerConfigSchema,
   McpServersListSchema,
+  McpServerStatusSchema,
   MemoryDocumentSchema,
   MeSchema,
   ModelCredentialSchema,
@@ -226,6 +227,7 @@ export const appContract = {
   mcp: {
     list: oc.output(McpServersListSchema),
     update: oc.input(McpServersListSchema).output(z.object({ ok: z.literal(true) })),
+    status: oc.output(z.object({ servers: z.array(McpServerStatusSchema) })),
   },
   notifications: {
     registerPush: oc

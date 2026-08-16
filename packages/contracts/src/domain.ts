@@ -199,6 +199,14 @@ export const McpServersListSchema = z.object({
 });
 export type McpServersList = z.infer<typeof McpServersListSchema>;
 
+export const McpServerStatusSchema = z.object({
+  name: z.string(),
+  status: z.enum(["connected", "error", "disabled"]),
+  toolCount: z.number(),
+  error: z.string().optional(),
+});
+export type McpServerStatus = z.infer<typeof McpServerStatusSchema>;
+
 export const MeSchema = z.object({
   userId: Id,
   email: z.string().email(),

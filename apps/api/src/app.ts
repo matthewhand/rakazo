@@ -178,6 +178,7 @@ export async function createApp(
     secrets,
     oauthLogins,
     composio: stack.composio,
+    mcpClient,
     dataDir: env.dataDir,
     env: {
       defaultProvider: env.defaultProvider,

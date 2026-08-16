@@ -28,12 +28,23 @@ interface McpClientConnection {
   client: Client;
   transport: StdioClientTransport | SSEClientTransport;
   serverName: string;
+  status: "connected" | "error";
+  toolCount?: number;
+  error?: string;
+}
+
+export interface McpServerStatus {
+  name: string;
+  status: "connected" | "error" | "disabled";
+  toolCount: number;
+  error?: string;
 }
 
 export class McpClient implements ConnectorProvider {
   private connections = new Map<string, McpClientConnection>();
   private initPromise: Promise<void> | undefined;
   private readonly configPromise: Promise<McpClientConfig>;
+  private connectionErrors = new Map<string, string>();
 
   constructor(config: McpClientConfig | Promise<McpClientConfig>) {
     this.configPromise = Promise.resolve(config);
@@ -60,9 +71,11 @@ export class McpClient implements ConnectorProvider {
       try {
         await this.connectServer(serverConfig);
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        this.connectionErrors.set(serverConfig.name, errorMsg);
         console.error(
           `[MCP] Failed to connect to server ${serverConfig.name}:`,
-          error instanceof Error ? error.message : String(error),
+          errorMsg,
         );
       }
     });
@@ -120,7 +133,11 @@ export class McpClient implements ConnectorProvider {
     })();
 
     const connection = await Promise.race([connectPromise, timeoutPromise]);
-    this.connections.set(config.name, connection);
+    this.connections.set(config.name, {
+      ...connection,
+      status: "connected",
+    });
+    this.connectionErrors.delete(config.name);
   }
 
   async discoverTools(context: AdapterContext): Promise<ConnectorTool[]> {
@@ -130,6 +147,7 @@ export class McpClient implements ConnectorProvider {
     for (const [serverName, connection] of this.connections.entries()) {
       try {
         const { tools } = await connection.client.listTools();
+        connection.toolCount = tools.length;
         for (const tool of tools) {
           allTools.push({
             name: `${serverName}.${tool.name}`,
@@ -145,10 +163,57 @@ export class McpClient implements ConnectorProvider {
           `[MCP] Failed to list tools from ${serverName}:`,
           error instanceof Error ? error.message : String(error),
         );
+        connection.status = "error";
+        connection.error = error instanceof Error ? error.message : String(error);
       }
     }
 
     return allTools;
+  }
+
+  async getServerStatus(): Promise<McpServerStatus[]> {
+    await this.initialize();
+    const config = await this.configPromise;
+    const statuses: McpServerStatus[] = [];
+
+    for (const server of config.servers) {
+      if (server.disabled) {
+        statuses.push({
+          name: server.name,
+          status: "disabled",
+          toolCount: 0,
+        });
+        continue;
+      }
+
+      const connection = this.connections.get(server.name);
+      const error = this.connectionErrors.get(server.name);
+
+      if (connection) {
+        statuses.push({
+          name: server.name,
+          status: connection.status,
+          toolCount: connection.toolCount ?? 0,
+          error: connection.error,
+        });
+      } else if (error) {
+        statuses.push({
+          name: server.name,
+          status: "error",
+          toolCount: 0,
+          error,
+        });
+      } else {
+        statuses.push({
+          name: server.name,
+          status: "error",
+          toolCount: 0,
+          error: "Not connected",
+        });
+      }
+    }
+
+    return statuses;
   }
 
   async *execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent> {
