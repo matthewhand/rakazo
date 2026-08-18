@@ -280,8 +280,10 @@ export class ComposioConnector implements ComposioProvider {
 
   async connectedAccountId(userId: string, slug: string): Promise<string | undefined> {
     const session = await this.sessionFor(userId);
-    const toolkits = await session.toolkits({ isConnected: true });
-    return toolkits.items.find((item) => item.slug === slug)?.connection?.connectedAccount?.id;
+    const toolkits = await collectPages((cursor) =>
+      session.toolkits({ isConnected: true, search: slug, limit: 50, cursor }),
+    );
+    return toolkits.find((item) => item.slug === slug)?.connection?.connectedAccount?.id;
   }
 
   private sdk(): Composio {
