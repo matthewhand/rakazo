@@ -16,7 +16,11 @@ import {
   InMemoryJobQueue,
   InMemoryRealtimeFanout,
   isComposioEnabled,
+  isMcpEnabled,
   LocalAgentHomeStore,
+  McpClient,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PiOAuthLogins,
   PostgresRealtimeFanout,
@@ -93,10 +97,35 @@ export async function createApp(
   const oauthLogins = new PiOAuthLogins();
   const home = new LocalAgentHomeStore(env.dataDir);
   const memory = new MarkdownMemoryStore(prisma);
-  const stack = createConnectorStack(isComposioEnabled(env.composioApiKey), composioOverride);
+  const envMcp = {
+    MCP_CONFIG_PATH: env.mcpConfigPath,
+    MCP_SERVERS: env.mcpServers,
+  };
+  const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
+  let mcpConfig;
+  try {
+    mcpConfig = await loadMcpConfig();
+  } catch {
+    mcpConfig = parseMcpConfigFromEnv(envMcp);
+  }
+  const mcpClient = new McpClient(mcpConfig, loadMcpConfig);
+  let mcpEnabled = isMcpEnabled(mcpConfig);
+  const reloadMcp = async () => {
+    const next = await loadMcpConfig();
+    await mcpClient.reload(next);
+    mcpEnabled = isMcpEnabled(next);
+  };
+  const stack = createConnectorStack(
+    isComposioEnabled(env.composioApiKey),
+    composioOverride,
+    mcpClient,
+  );
   const connector = stack.destination;
   await connector.start();
   void stack.composio?.warmDirectory().catch(() => undefined);
+  void mcpClient.initialize().catch((error) => {
+    console.error("[MCP] Initialization failed:", error);
+  });
   const runtime =
     env.agentRuntime === "scripted" ? new ScriptedAgentRuntime() : new PiAgentRuntime();
   const notifications = new ExpoPushProvider(env.dataDir);
@@ -182,6 +211,8 @@ export async function createApp(
     secrets,
     oauthLogins,
     composio: stack.composio,
+    mcpClient,
+    reloadMcp,
     dataDir: env.dataDir,
     env: {
       defaultProvider: env.defaultProvider,
@@ -229,6 +260,7 @@ export async function createApp(
       runtime: env.agentRuntime,
       sandbox: env.sandboxProvider,
       composio: Boolean(stack.composio),
+      mcp: mcpEnabled,
       jobs: jobKind,
       realtime: realtime.describe().id,
     }),
@@ -248,6 +280,7 @@ export async function createApp(
       await jobs.close();
       await realtime.close();
       await connector.stop();
+      await mcpClient?.close().catch(() => undefined);
       await prisma.$disconnect().catch(() => undefined);
       await created.pool?.end().catch(() => undefined);
     },

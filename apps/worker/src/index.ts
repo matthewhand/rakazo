@@ -17,6 +17,9 @@ import {
   InMemoryJobQueue,
   isComposioEnabled,
   LocalAgentHomeStore,
+  McpClient,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PostgresRealtimeFanout,
   ScriptedAgentRuntime,
@@ -46,9 +49,28 @@ async function main() {
     dataDir,
     prisma,
   });
-  const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY));
+  const envMcp = {
+    MCP_CONFIG_PATH: process.env.MCP_CONFIG_PATH,
+    MCP_SERVERS: process.env.MCP_SERVERS,
+  };
+  const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
+  let mcpConfig;
+  try {
+    mcpConfig = await loadMcpConfig();
+  } catch {
+    mcpConfig = parseMcpConfigFromEnv(envMcp);
+  }
+  const mcpClient = new McpClient(mcpConfig, loadMcpConfig);
+  const stack = createConnectorStack(
+    isComposioEnabled(process.env.COMPOSIO_API_KEY),
+    undefined,
+    mcpClient,
+  );
   const connector = stack.destination;
   await connector.start();
+  void mcpClient.initialize().catch((error) => {
+    console.error("[MCP] Initialization failed:", error);
+  });
   const secrets = new EncryptedSecretStore(resolveEncryptionKey(process.env));
   const home = new LocalAgentHomeStore(dataDir);
   const inMemoryJobs = process.env.WAKEUP_DRIVER === "memory" ? new InMemoryJobQueue() : undefined;
@@ -98,6 +120,7 @@ async function main() {
     await jobs.close();
     await realtime.close();
     await connector.stop();
+    await mcpClient.close().catch(() => undefined);
     await prisma.$disconnect().catch(() => undefined);
     await pool.end().catch(() => undefined);
   };

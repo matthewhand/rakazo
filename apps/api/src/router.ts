@@ -89,6 +89,8 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   composio?: ComposioProvider;
+  mcpClient?: unknown;
+  reloadMcp?: () => Promise<void>;
   dataDir: string;
   env: {
     defaultProvider: string;

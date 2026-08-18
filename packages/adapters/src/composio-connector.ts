@@ -294,6 +294,11 @@ export class CompositeConnector implements ConnectorProvider {
   constructor(
     readonly destination: DestinationEmulator,
     readonly composio?: ComposioProvider,
+    readonly mcp?: {
+      discoverTools(context: AdapterContext): Promise<ConnectorTool[]>;
+      execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent>;
+      ownsTool?(tool: string): boolean;
+    },
   ) {}
 
   describe() {
@@ -302,35 +307,85 @@ export class CompositeConnector implements ConnectorProvider {
 
   async discoverTools(context: AdapterContext): Promise<ConnectorTool[]> {
     const dest = await this.destination.discoverTools(context);
-    if (!this.composio) return dest;
-    try {
-      const extra = await this.composio.discoverTools(context);
-      const destNames = new Set(dest.map((tool) => tool.name));
-      return [...dest, ...extra.filter((tool) => !destNames.has(tool.name))];
-    } catch {
-      return dest;
+    const allTools = [...dest];
+    const seenNames = new Set(dest.map((tool) => tool.name));
+
+    if (this.composio) {
+      try {
+        const composioTools = await this.composio.discoverTools(context);
+        for (const tool of composioTools) {
+          if (!seenNames.has(tool.name)) {
+            allTools.push(tool);
+            seenNames.add(tool.name);
+          }
+        }
+      } catch (error) {
+        console.error("[Composio] Tool discovery failed:", error);
+      }
     }
+
+    if (this.mcp) {
+      try {
+        const mcpTools = await this.mcp.discoverTools(context);
+        for (const tool of mcpTools) {
+          if (!seenNames.has(tool.name)) {
+            allTools.push(tool);
+            seenNames.add(tool.name);
+          }
+        }
+      } catch (error) {
+        console.error("[MCP] Tool discovery failed:", error);
+      }
+    }
+
+    return allTools;
   }
 
   async *execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent> {
-    if (call.tool === "destination.write" || !this.composio) {
+    if (call.tool === "destination.write") {
       yield* this.destination.execute(call, context);
       return;
     }
-    yield* this.composio.execute(call, context);
+
+    if (this.mcp && this.mcpOwns(call.tool)) {
+      try {
+        yield* this.mcp.execute(call, context);
+        return;
+      } catch (error) {
+        console.error(`[MCP] Execution failed for ${call.tool}:`, error);
+      }
+    }
+
+    if (this.composio) {
+      yield* this.composio.execute(call, context);
+      return;
+    }
+
+    yield { type: "error", message: `Unknown tool: ${call.tool}` };
+  }
+
+  private mcpOwns(tool: string): boolean {
+    if (this.mcp?.ownsTool) return this.mcp.ownsTool(tool);
+    return tool.includes(".");
   }
 }
 
 export function createConnectorStack(
   composioEnabled: boolean,
   composioOverride?: ComposioProvider,
+  mcpClient?: {
+    discoverTools(context: AdapterContext): Promise<ConnectorTool[]>;
+    execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent>;
+    ownsTool?(tool: string): boolean;
+  },
 ) {
   const destination = new DestinationEmulator();
   const composio = composioOverride ?? (composioEnabled ? new ComposioConnector() : undefined);
   return {
     destination,
     composio,
-    connector: new CompositeConnector(destination, composio),
+    mcp: mcpClient,
+    connector: new CompositeConnector(destination, composio, mcpClient),
   };
 }
 

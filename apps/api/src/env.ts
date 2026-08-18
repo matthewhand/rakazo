@@ -21,6 +21,8 @@ export interface AppEnv {
   daytonaApiUrl: string | undefined;
   daytonaTarget: string | undefined;
   composioApiKey: string | undefined;
+  mcpConfigPath: string | undefined;
+  mcpServers: string | undefined;
   defaultProvider: string;
   defaultModel: string;
   wakeupDriver: string;
@@ -50,6 +52,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     daytonaApiUrl: source.DAYTONA_API_URL,
     daytonaTarget: source.DAYTONA_TARGET,
     composioApiKey: source.COMPOSIO_API_KEY,
+    mcpConfigPath: source.MCP_CONFIG_PATH,
+    mcpServers: source.MCP_SERVERS,
     defaultProvider: source.PI_DEFAULT_PROVIDER ?? "openrouter",
     defaultModel: source.PI_DEFAULT_MODEL ?? "deepseek/deepseek-v4-flash-0731",
     wakeupDriver: source.WAKEUP_DRIVER ?? "graphile",
