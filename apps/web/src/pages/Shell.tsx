@@ -33,6 +33,7 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { AgentCommsPill, isCommsBlock } from "../components/AgentComms";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
 import { markAfterPaint, markOnce } from "../lib/performance";
@@ -46,7 +47,6 @@ import {
   reduceThreadSnapshot,
 } from "../lib/thread-events";
 import type { ContextMenuPosition } from "./BotContextMenu";
-import { AgentCommsPill, isCommsBlock } from "../components/AgentComms";
 import { HostComputerPrompt } from "./HostComputerPrompt";
 import { WindowChrome } from "./WindowChrome";
 
