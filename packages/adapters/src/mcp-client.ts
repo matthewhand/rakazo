@@ -356,13 +356,15 @@ export class McpClient implements ConnectorProvider {
   }
 }
 
+export type McpConfigStore = {
+  deploymentSettings: {
+    findUnique: (args: { where: { id: string } }) => Promise<{ mcpServers?: string | null } | null>;
+  };
+};
+
 export function parseMcpConfig(
   envVars: Record<string, string | undefined>,
-  prisma?: {
-    deploymentSettings: {
-      findUnique: (args: unknown) => Promise<{ mcpServers: string | null } | null>;
-    };
-  },
+  prisma?: McpConfigStore,
 ): McpClientConfig | Promise<McpClientConfig> {
   if (prisma) return parseMcpConfigAsync(envVars, prisma);
   return parseMcpConfigFromEnv(envVars);
@@ -381,11 +383,7 @@ export function parseMcpConfigFromEnv(
 
 async function parseMcpConfigAsync(
   envVars: Record<string, string | undefined>,
-  prisma: {
-    deploymentSettings: {
-      findUnique: (args: unknown) => Promise<{ mcpServers: string | null } | null>;
-    };
-  },
+  prisma: McpConfigStore,
 ): Promise<McpClientConfig> {
   const servers = [
     ...serversFromConfigPath(envVars.MCP_CONFIG_PATH),
