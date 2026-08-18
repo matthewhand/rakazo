@@ -158,7 +158,30 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
   await expect(page.getByRole("complementary").getByRole("button", { name: /Scout/ })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByRole("main").getByRole("button", { name: "Scout bot" })).toBeVisible();
   await captureScreenshot(page, testInfo, "13-spawned-bot");
+  await page.getByRole("main").getByRole("button", { name: "Scout bot" }).click();
+  await expect(page.getByRole("dialog", { name: "Scout" })).toBeVisible();
+  await captureScreenshot(page, testInfo, "13a-child-bot-comms-popup");
+  await page.getByRole("button", { name: "Close" }).click();
+
+  await composer.fill("write a file in your home called notes/result.txt that says isolation-ok");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main").getByRole("button", { name: /write_file/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  await captureScreenshot(page, testInfo, "13b-tool-comms-pill");
+  await page.getByRole("main").getByRole("button", { name: /write_file/ }).click();
+  await expect(page.getByRole("dialog", { name: /write_file/ })).toBeVisible();
+  await captureScreenshot(page, testInfo, "13c-tool-comms-popup");
+  await page.getByRole("button", { name: "Close" }).click();
+
+  await composer.fill("delegate to a helper to summarize venues");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main").getByRole("button", { name: /helper/i })).toBeVisible({
+    timeout: 30_000,
+  });
+  await captureScreenshot(page, testInfo, "13d-helper-comms-pill");
 
   await page
     .getByRole("complementary")
