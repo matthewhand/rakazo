@@ -25,6 +25,7 @@ import {
   hasActiveComputerControl,
   listPiCatalog,
   type McpClient,
+  mergeMcpServerSecrets,
   normalizeMcpServers,
   type PiOAuthLogins,
   provisionComputer,
@@ -1546,24 +1547,7 @@ export function createRouter(deps: RouterDeps) {
           }
         }
         const existing = await readStoredMcpServers(deps.prisma);
-        const previous = new Map(existing.map((server) => [server.name, server]));
-        const removed = existing.filter(
-          (server) => !input.servers.some((next) => next.name === server.name),
-        );
-        const added = input.servers.filter(
-          (server) => !existing.some((prior) => prior.name === server.name),
-        );
-        if (removed.length === 1 && added.length === 1 && removed[0] && added[0]) {
-          previous.set(added[0].name, removed[0]);
-        }
-        const merged = input.servers.map((server) => {
-          const prior = previous.get(server.name);
-          return {
-            ...server,
-            headers: server.headers ?? prior?.headers,
-            env: server.env ?? prior?.env,
-          };
-        });
+        const merged = mergeMcpServerSecrets(input.servers, existing);
         const serialized = JSON.stringify(merged);
         await deps.prisma.deploymentSettings.upsert({
           where: { id: "default" },

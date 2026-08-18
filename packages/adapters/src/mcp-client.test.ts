@@ -480,7 +480,27 @@ describe("secret helpers", () => {
     expect(child.ENCRYPTION_KEY).toBeUndefined();
   });
 
-  it("does not copy secrets onto a differently named server", () => {
+  it("carries secrets across a one-to-one rename", () => {
+    const merged = mergeMcpServerSecrets(
+      [{ name: "renamed", type: "http", url: "http://127.0.0.1:3000" }],
+      [
+        {
+          name: "notes",
+          type: "http",
+          url: "http://127.0.0.1:3000",
+          headers: { Authorization: "Bearer secret" },
+          env: { TOKEN: "x" },
+        },
+      ],
+    );
+    expect(merged[0]).toMatchObject({
+      name: "renamed",
+      headers: { Authorization: "Bearer secret" },
+      env: { TOKEN: "x" },
+    });
+  });
+
+  it("does not guess secrets when more than one name changed", () => {
     const merged = mergeMcpServerSecrets(
       [{ name: "other", type: "http", url: "http://127.0.0.1:3000" }],
       [
@@ -490,6 +510,7 @@ describe("secret helpers", () => {
           url: "http://127.0.0.1:3000",
           headers: { Authorization: "Bearer secret" },
         },
+        { name: "slack", type: "http", url: "http://127.0.0.1:4000" },
       ],
     );
     expect(merged[0]?.headers).toBeUndefined();

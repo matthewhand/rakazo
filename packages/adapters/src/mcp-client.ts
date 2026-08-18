@@ -445,6 +445,11 @@ export function mergeMcpServerSecrets(
   existing: McpServerConfig[],
 ): McpServerConfig[] {
   const previous = new Map(existing.map((server) => [server.name, server]));
+  const removed = existing.filter((server) => !incoming.some((next) => next.name === server.name));
+  const added = incoming.filter((server) => !existing.some((prior) => prior.name === server.name));
+  if (removed.length === 1 && added.length === 1 && removed[0] && added[0]) {
+    previous.set(added[0].name, removed[0]);
+  }
   return incoming.map((server) => {
     const prior = previous.get(server.name);
     return {
