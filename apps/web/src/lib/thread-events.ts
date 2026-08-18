@@ -11,6 +11,7 @@ import {
   progressMessageId,
   progressMessageText,
   subagentBlockFromPayload,
+  toolBlockFromPayload,
 } from "@rakazo/core";
 
 const computerStates: ReadonlySet<unknown> = new Set<ComputerStatus["state"]>([
@@ -67,6 +68,32 @@ export function reduceThreadSnapshot(
     const without = prev.messages.filter((message) => !message.id.startsWith("progress:"));
     return { ...prev, cursor: event.seq, messages: [...without, streaming] };
   }
+  if (event.type === "agent.tool.called") {
+    const block = toolBlockFromPayload(event.payload);
+    const existing = prev.messages.find((message) => message.id === `tool:${block.executionId}`);
+    const existingStatus =
+      existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+    if (
+      (existingStatus === "completed" || existingStatus === "failed") &&
+      block.status === "running"
+    ) {
+      return { ...prev, cursor: event.seq };
+    }
+    const next: ThreadMessage = {
+      id: `tool:${block.executionId}`,
+      threadId: event.threadId,
+      seq: event.seq,
+      role: "bot",
+      blocks: [block],
+      runId: event.runId,
+      createdAt: event.createdAt,
+    };
+    const without = prev.messages.filter(
+      (message) => message.id !== next.id && !message.id.startsWith("progress:"),
+    );
+    const progress = prev.messages.filter((message) => message.id.startsWith("progress:"));
+    return { ...prev, cursor: event.seq, messages: [...without, next, ...progress] };
+  }
   if (event.type === "thread.subagent") {
     const block = subagentBlockFromPayload(event.payload);
     const next: ThreadMessage = {
@@ -99,11 +126,18 @@ export function reduceThreadSnapshot(
     const replacedSubagentIds = new Set(
       blocks.filter((block) => block.kind === "subagent").map((block) => block.agentId),
     );
+    const replacedToolIds = new Set(
+      blocks
+        .filter((block) => block.kind === "tool")
+        .map((block) => block.executionId)
+        .filter(Boolean),
+    );
     const without = prev.messages.filter(
       (message) =>
         message.id !== next.id &&
         !message.id.startsWith("progress:") &&
-        !replacedSubagent(message, replacedSubagentIds),
+        !replacedSubagent(message, replacedSubagentIds) &&
+        !replacedTool(message, replacedToolIds),
     );
     return { ...prev, cursor: event.seq, messages: [...without, next] };
   }
@@ -150,4 +184,11 @@ function isComputerState(value: unknown): value is ComputerStatus["state"] {
 function replacedSubagent(message: ThreadMessage, agentIds: ReadonlySet<string>) {
   if (agentIds.size === 0) return false;
   return message.blocks.some((block) => block.kind === "subagent" && agentIds.has(block.agentId));
+}
+
+function replacedTool(message: ThreadMessage, executionIds: ReadonlySet<string>) {
+  if (executionIds.size === 0) return false;
+  return message.blocks.some(
+    (block) => block.kind === "tool" && executionIds.has(block.executionId),
+  );
 }

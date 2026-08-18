@@ -241,6 +241,37 @@ describe("mobile thread event reduction", () => {
     expect(next?.messages[1]?.blocks).toEqual([completed]);
   });
 
+  it("projects tool calls as live pills", () => {
+    const next = applyMobileThreadEvent(snapshot(), {
+      type: "agent.tool.called",
+      payload: {
+        name: "notes.write",
+        executionId: "exec-1",
+        status: "completed",
+        result: "Wrote note",
+      },
+    });
+    expect(next?.messages.map((item) => item.id)).toEqual(["tool:exec-1"]);
+    expect(next?.messages[0]?.blocks[0]).toMatchObject({
+      kind: "tool",
+      name: "notes.write",
+      status: "completed",
+    });
+  });
+
+  it("keeps streamed answer progress when a tool pill arrives", () => {
+    const withProgress = applyMobileThreadEvent(snapshot(), {
+      type: "thread.progress",
+      runId: "run-1",
+      payload: { text: "Working" },
+    });
+    const next = applyMobileThreadEvent(withProgress, {
+      type: "agent.tool.called",
+      payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+    });
+    expect(next?.messages.map((item) => item.id)).toEqual(["tool:exec-1", "progress:run-1"]);
+  });
+
   it("applies the durable waiting-input run transition", () => {
     const initial: MobileSnapshot = { ...snapshot(), run: { status: "running" } };
     const waiting = applyMobileThreadEvent(initial, {

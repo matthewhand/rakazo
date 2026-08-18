@@ -20,6 +20,7 @@ import {
   isTerminal,
   nextCronDate,
   nextFence,
+  redactRecord,
   redactSecrets,
   sandboxCommandTimeoutMs,
 } from "@rakazo/core";
@@ -370,6 +371,29 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return result;
         };
 
+        const recordToolStatus = async (
+          name: string,
+          executionId: string,
+          args: Record<string, unknown>,
+          status: "running" | "completed" | "failed",
+          result?: string,
+        ) => {
+          await deps.events.append({
+            workspaceId: run.workspaceId,
+            threadId: thread.id,
+            botId: bot.id,
+            type: "agent.tool.called",
+            runId,
+            payload: {
+              name,
+              executionId,
+              args: redactRecord(args, runSecrets),
+              status,
+              result,
+            },
+          });
+        };
+
         const applyTool = async (
           name: string,
           args: Record<string, unknown>,
@@ -669,6 +693,34 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return finish({ error: `unknown tool ${name}` });
         };
 
+        const applyRecordedTool = async (
+          name: string,
+          args: Record<string, unknown>,
+          executionId: string,
+        ) => {
+          try {
+            const result = await applyTool(name, args, executionId);
+            await recordToolStatus(
+              name,
+              executionId,
+              args,
+              "completed",
+              summarizeToolOutcome(result, runSecrets),
+            );
+            return result;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await recordToolStatus(
+              name,
+              executionId,
+              args,
+              "failed",
+              redactSecrets(message, runSecrets),
+            );
+            throw error;
+          }
+        };
+
         const pluginLine =
           connectedPlugins.length > 0
             ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.provider})`).join(", ")}. Use those plugin tools when the user asks about those apps.`
@@ -707,7 +759,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               },
               resumeFromCheckpoint: resumeFromTakeover ? "takeover" : undefined,
               script,
-              executeTool: scripted ? undefined : applyTool,
+              executeTool: scripted ? undefined : applyRecordedTool,
             },
             context,
           )) {
@@ -834,15 +886,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
               });
               return;
             } else if (event.type === "tool") {
-              await deps.events.append({
-                workspaceId: run.workspaceId,
-                threadId: thread.id,
-                botId: bot.id,
-                type: "agent.tool.called",
-                runId,
-                payload: { name: event.name, executionId: event.executionId },
-              });
-              if (scripted) await applyTool(event.name, event.args, event.executionId);
+              await recordToolStatus(
+                event.name,
+                event.executionId,
+                event.args,
+                "running",
+              );
+              if (scripted) await applyRecordedTool(event.name, event.args, event.executionId);
             } else if (event.type === "subagent") {
               const safeTask = redactSecrets(event.task, runSecrets);
               const safeProgress = event.progress
@@ -1307,6 +1357,38 @@ async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Pr
   } finally {
     release();
     if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
+  }
+}
+
+function summarizeToolOutcome(result: unknown, secrets: string[]): string | undefined {
+  if (result == null) return undefined;
+  if (typeof result === "string") return redactSecrets(result, secrets).slice(0, 4_000);
+  if (typeof result === "object") {
+    const record = result as { content?: unknown; error?: unknown; ok?: unknown };
+    if (Array.isArray(record.content)) {
+      const text = record.content
+        .filter(
+          (part): part is { type: string; text?: string } =>
+            Boolean(part) && typeof part === "object" && (part as { type?: string }).type === "text",
+        )
+        .map((part) => part.text ?? "")
+        .join("\n")
+        .trim();
+      if (text) return redactSecrets(text, secrets).slice(0, 4_000);
+      if (
+        record.content.some(
+          (part) => part && typeof part === "object" && (part as { type?: string }).type === "image",
+        )
+      ) {
+        return "Captured a screenshot";
+      }
+    }
+    if (typeof record.error === "string") return redactSecrets(record.error, secrets).slice(0, 4_000);
+  }
+  try {
+    return redactSecrets(JSON.stringify(result), secrets).slice(0, 4_000);
+  } catch {
+    return "ok";
   }
 }
 

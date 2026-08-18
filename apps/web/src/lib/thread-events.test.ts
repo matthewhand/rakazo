@@ -103,6 +103,54 @@ describe("thread event reduction", () => {
     });
   });
 
+  it("projects tool calls as live pills without dropping the streamed answer", () => {
+    const initial = snapshot([message("progress:run-1", [{ kind: "progress", text: "Working" }])]);
+    const next = reduceThreadSnapshot(
+      initial,
+      event({
+        type: "agent.tool.called",
+        seq: 4,
+        payload: {
+          name: "notes.write",
+          executionId: "exec-1",
+          args: { path: "hello.md" },
+        },
+      }),
+    );
+    expect(next?.messages.map((item) => item.id)).toEqual(["tool:exec-1", "progress:run-1"]);
+    expect(next?.messages[0]?.blocks[0]).toMatchObject({
+      kind: "tool",
+      name: "notes.write",
+      args: { path: "hello.md" },
+    });
+  });
+
+  it("does not overwrite a completed tool with a later running event", () => {
+    const initial = snapshot([
+      message("tool:exec-1", [
+        {
+          kind: "tool",
+          executionId: "exec-1",
+          name: "notes.write",
+          status: "completed",
+          result: "Wrote note",
+        },
+      ]),
+    ]);
+    const next = reduceThreadSnapshot(
+      initial,
+      event({
+        type: "agent.tool.called",
+        seq: 5,
+        payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+      }),
+    );
+    expect(next?.messages[0]?.blocks[0]).toMatchObject({
+      status: "completed",
+      result: "Wrote note",
+    });
+  });
+
   it("replaces transient progress and a matching live subagent with the durable message", () => {
     const initial = snapshot([
       message("durable", [{ kind: "text", text: "old value" }]),
