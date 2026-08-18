@@ -114,7 +114,7 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await page.getByRole("tab", { name: "MCP servers" }).click();
   await expect(page.getByText(/MCP servers/i).first()).toBeVisible();
   await expect(
-    page.getByText(/No MCP servers configured|Only the deployment owner/i),
+    page.getByText(/No MCP servers configured|Only the deployment owner/i).first(),
   ).toBeVisible();
   await captureScreenshot(page, testInfo, "11c-mcp-servers");
   await page.getByRole("button", { name: "Close plugins" }).click();
