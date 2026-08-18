@@ -216,6 +216,17 @@ describe("McpClient", () => {
     expect(client.ownsTool("old.notes.write")).toBe(false);
     expect(client.ownsTool("new.notes.write")).toBe(true);
   });
+
+  it("does not refresh from the database after close", async () => {
+    let sourceCalls = 0;
+    const closed = new McpClient({ servers: [] }, async () => {
+      sourceCalls += 1;
+      return { servers: [] };
+    });
+    await closed.close();
+    await closed.initialize();
+    expect(sourceCalls).toBe(0);
+  });
 });
 
 describe("parseMcpConfig", () => {
@@ -244,6 +255,23 @@ describe("parseMcpConfig", () => {
   it("should handle malformed JSON in MCP_SERVERS", () => {
     const config = parseMcpConfigFromEnv({ MCP_SERVERS: "not json" });
     expect(config.servers).toHaveLength(0);
+  });
+
+  it("keeps the first server when file and env share a name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rakazo-mcp-"));
+    const path = join(dir, "mcp.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        mcpServers: { notes: { url: "http://127.0.0.1:1111" } },
+      }),
+    );
+    const config = parseMcpConfigFromEnv({
+      MCP_CONFIG_PATH: path,
+      MCP_SERVERS: JSON.stringify([{ name: "notes", type: "http", url: "http://127.0.0.1:2222" }]),
+    });
+    expect(config.servers).toHaveLength(1);
+    expect(config.servers[0]?.url).toBe("http://127.0.0.1:1111");
   });
 
   it("loads Cursor-shaped servers from MCP_CONFIG_PATH", () => {

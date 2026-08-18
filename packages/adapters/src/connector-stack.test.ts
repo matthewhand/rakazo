@@ -70,6 +70,55 @@ describe("CompositeConnector routing", () => {
     expect(events).toEqual([{ type: "error", message: "Unknown tool: gmail.send" }]);
   });
 
+  it("does not fall through to Composio when an owned MCP tool throws", async () => {
+    const destination = new DestinationEmulator();
+    const mcp = {
+      ownsTool: (tool: string) => tool.startsWith("notes."),
+      async discoverTools() {
+        return [];
+      },
+      // biome-ignore lint/correctness/useYield: throw is the case under test
+      async *execute() {
+        throw new Error("transport exploded");
+      },
+    };
+    const composio = {
+      describe: () => ({
+        id: "composio-emulator",
+        contractVersion: "1",
+        adapterVersion: "0.1.0",
+        capabilities: { discover: true, oauth: false, secretsBrokered: false },
+      }),
+      async discoverTools() {
+        return [];
+      },
+      async *execute() {
+        yield { type: "result" as const, data: { from: "composio" } };
+      },
+      async catalog() {
+        return [];
+      },
+      async warmDirectory() {},
+      async connectionReady() {
+        return false;
+      },
+      async begin() {
+        return { authorizationUrl: null, state: "x" };
+      },
+      async complete() {
+        return { connectionRef: "x" };
+      },
+      async revoke() {},
+    };
+    const connector = new CompositeConnector(destination, composio, mcp);
+    const events = await collect(
+      connector.execute({ tool: "notes.write", args: {}, executionId: "e-throw" }, context),
+    );
+    expect(events).toEqual([
+      { type: "error", message: "MCP execution failed: transport exploded" },
+    ]);
+  });
+
   it("routes owned MCP names to the MCP client", async () => {
     const destination = new DestinationEmulator();
     const mcp = fakeMcp({ owns: (tool) => tool.startsWith("notes."), label: "notes" });

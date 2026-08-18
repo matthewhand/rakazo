@@ -352,10 +352,14 @@ export class CompositeConnector implements ConnectorProvider {
     if (this.mcp && this.mcpOwns(call.tool)) {
       try {
         yield* this.mcp.execute(call, context);
-        return;
       } catch (error) {
         console.error(`[MCP] Execution failed for ${call.tool}:`, error);
+        yield {
+          type: "error",
+          message: `MCP execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
       }
+      return;
     }
 
     if (this.composio) {

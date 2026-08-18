@@ -94,6 +94,7 @@ export class McpClient implements ConnectorProvider {
   private readonly source?: McpConfigSource;
   private fingerprint: string;
   private connectionErrors = new Map<string, string>();
+  private closed = false;
 
   constructor(config: McpClientConfig, source?: McpConfigSource) {
     this.config = config;
@@ -112,7 +113,9 @@ export class McpClient implements ConnectorProvider {
 
   async initialize(): Promise<void> {
     return this.serialize(async () => {
+      if (this.closed) return;
       await this.refreshIfStale();
+      if (this.closed) return;
       if (!this.initPromise) this.initPromise = this.doInitialize();
       await this.initPromise;
     });
@@ -120,6 +123,7 @@ export class McpClient implements ConnectorProvider {
 
   async reload(config: McpClientConfig): Promise<void> {
     return this.serialize(async () => {
+      this.closed = false;
       await this.closeUnlocked();
       this.config = config;
       this.fingerprint = configFingerprint(config);
@@ -332,7 +336,10 @@ export class McpClient implements ConnectorProvider {
   }
 
   async close(): Promise<void> {
-    return this.serialize(() => this.closeUnlocked());
+    return this.serialize(async () => {
+      this.closed = true;
+      await this.closeUnlocked();
+    });
   }
 
   private async closeUnlocked(): Promise<void> {
@@ -365,10 +372,10 @@ export function parseMcpConfigFromEnv(
   envVars: Record<string, string | undefined>,
 ): McpClientConfig {
   return {
-    servers: [
+    servers: dedupeServers([
       ...serversFromConfigPath(envVars.MCP_CONFIG_PATH),
       ...serversFromEnvJson(envVars.MCP_SERVERS),
-    ],
+    ]),
   };
 }
 
