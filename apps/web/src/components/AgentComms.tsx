@@ -1,5 +1,5 @@
-import type { MessageBlock } from "@rakazo/contracts";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
+import type { MessageBlock } from "@rakazo/contracts";
 import { useEffect, useState } from "react";
 
 type CommsBlock = Extract<MessageBlock, { kind: "subagent" | "child_bot" | "tool" }>;
@@ -78,22 +78,24 @@ function AgentCommsPopup({
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4"
-      role="presentation"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4">
+      <button
+        type="button"
+        aria-label="Close"
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={commsTitle(block)}
-        className="flex max-h-[min(640px,90vh)] w-[min(560px,100%)] flex-col overflow-hidden rounded-[22px] border border-[#232326] bg-[#141416] shadow-[0_40px_90px_rgba(0,0,0,.55)]"
+        className="relative z-10 flex max-h-[min(640px,90vh)] w-[min(560px,100%)] flex-col overflow-hidden rounded-[22px] border border-[#232326] bg-[#141416] shadow-[0_40px_90px_rgba(0,0,0,.55)]"
       >
         <div className="flex items-start justify-between gap-4 border-b border-[#1C1C1E] px-5 py-4">
           <div className="min-w-0">
-            <div className="truncate text-[16px] font-medium text-[#F1F1F2]">{commsTitle(block)}</div>
+            <div className="truncate text-[16px] font-medium text-[#F1F1F2]">
+              {commsTitle(block)}
+            </div>
             <div className="mt-1 text-[13px] text-[#85858A]">{commsKindLabel(block)}</div>
           </div>
           <button type="button" aria-label="Close" onClick={onClose} className="text-[#85858A]">

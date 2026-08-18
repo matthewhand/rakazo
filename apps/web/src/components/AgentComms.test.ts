@@ -5,11 +5,17 @@ describe("comms pills", () => {
   it("treats helper, child-bot, and tool blocks as comms", () => {
     expect(isCommsBlock({ kind: "text", text: "hi" })).toBe(false);
     expect(
-      isCommsBlock({ kind: "subagent", agentId: "a1", name: "Helper", task: " dig", status: "running" }),
+      isCommsBlock({
+        kind: "subagent",
+        agentId: "a1",
+        name: "Helper",
+        task: " dig",
+        status: "running",
+      }),
     ).toBe(true);
-    expect(
-      isCommsBlock({ kind: "child_bot", botId: "b1", name: "Child", status: "created" }),
-    ).toBe(true);
+    expect(isCommsBlock({ kind: "child_bot", botId: "b1", name: "Child", status: "created" })).toBe(
+      true,
+    );
     expect(
       isCommsBlock({ kind: "tool", executionId: "e1", name: "notes.write", status: "running" }),
     ).toBe(true);

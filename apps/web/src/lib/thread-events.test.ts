@@ -129,7 +129,11 @@ describe("thread event reduction", () => {
     const previous = snapshot(
       [
         message("m-0", [], 0),
-        message("tool:stale", [{ kind: "tool", executionId: "stale", name: "old", status: "running" }], 4),
+        message(
+          "tool:stale",
+          [{ kind: "tool", executionId: "stale", name: "old", status: "running" }],
+          4,
+        ),
       ],
       null,
     );
