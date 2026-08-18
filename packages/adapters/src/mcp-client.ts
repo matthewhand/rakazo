@@ -289,7 +289,7 @@ export class McpClient implements ConnectorProvider {
     if (!connection) {
       yield {
         type: "error",
-        message: `MCP server ${serverName} not found or not connected`,
+        message: `MCP server ${matched.name} not found or not connected`,
       };
       return;
     }
