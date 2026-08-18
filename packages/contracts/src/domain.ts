@@ -217,7 +217,11 @@ export const DeploymentSettingsSchema = z.object({
 });
 
 export const McpServerConfigSchema = z.object({
-  name: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._-]+$/),
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9._-]+$/),
   type: z.enum(["stdio", "sse", "http"]),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),

@@ -139,13 +139,7 @@ export function PluginsOverlay({
   }
 
   return (
-    <div
-      className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4 sm:p-10"
-      role="presentation"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4 sm:p-10">
       <div
         role="dialog"
         aria-modal="true"
@@ -171,7 +165,11 @@ export function PluginsOverlay({
           </button>
         </div>
 
-        <div role="tablist" aria-label="Plugin sources" className="flex gap-2 border-b border-[#26262A] px-8 pt-4">
+        <div
+          role="tablist"
+          aria-label="Plugin sources"
+          className="flex gap-2 border-b border-[#26262A] px-8 pt-4"
+        >
           <button
             type="button"
             role="tab"
