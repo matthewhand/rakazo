@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { AdapterContext, ConnectorEvent } from "@rakazo/adapter-kit";
+import { describe, expect, it } from "vitest";
 import {
   type ComposioProvider,
   CompositeConnector,
@@ -124,7 +124,11 @@ describe("createConnectorStack", () => {
       },
       async revoke() {},
     };
-    const stack = createConnectorStack(true, override, fakeMcp({ owns: () => false, label: "notes" }));
+    const stack = createConnectorStack(
+      true,
+      override,
+      fakeMcp({ owns: () => false, label: "notes" }),
+    );
     expect(stack.composio?.describe().id).toBe("composio-emulator");
     expect(stack.mcp).toBeTruthy();
   });

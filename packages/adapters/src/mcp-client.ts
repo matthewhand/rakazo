@@ -263,7 +263,6 @@ export class McpClient implements ConnectorProvider {
     await this.initialize();
 
     const matched = matchMcpServer(this.config.servers, call.tool, { includeDisabled: true });
-    const serverName = matched?.name;
     const toolName = matched ? call.tool.slice(matched.name.length + 1) : "";
 
     if (!matched) {
@@ -280,13 +279,13 @@ export class McpClient implements ConnectorProvider {
       yield {
         type: "error",
         message: toolName
-          ? `MCP server ${serverName} not found or not connected`
+          ? `MCP server ${matched.name} not found or not connected`
           : `Invalid MCP tool name: ${call.tool}`,
       };
       return;
     }
 
-    const connection = this.connections.get(serverName);
+    const connection = this.connections.get(matched.name);
     if (!connection) {
       yield {
         type: "error",
@@ -362,8 +361,15 @@ export function parseMcpConfig(
   return parseMcpConfigFromEnv(envVars);
 }
 
-export function parseMcpConfigFromEnv(envVars: Record<string, string | undefined>): McpClientConfig {
-  return { servers: [...serversFromConfigPath(envVars.MCP_CONFIG_PATH), ...serversFromEnvJson(envVars.MCP_SERVERS)] };
+export function parseMcpConfigFromEnv(
+  envVars: Record<string, string | undefined>,
+): McpClientConfig {
+  return {
+    servers: [
+      ...serversFromConfigPath(envVars.MCP_CONFIG_PATH),
+      ...serversFromEnvJson(envVars.MCP_SERVERS),
+    ],
+  };
 }
 
 async function parseMcpConfigAsync(
