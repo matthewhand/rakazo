@@ -125,6 +125,30 @@ describe("thread event reduction", () => {
     });
   });
 
+  it("takes live tool pills from a refreshed snapshot instead of stale client state", () => {
+    const previous = snapshot(
+      [
+        message("m-0", [], 0),
+        message("tool:stale", [{ kind: "tool", executionId: "stale", name: "old", status: "running" }], 4),
+      ],
+      null,
+    );
+    const recent = snapshot(
+      [
+        message("m-1", [], 1),
+        message(
+          "tool:exec-1",
+          [{ kind: "tool", executionId: "exec-1", name: "notes.write", status: "completed" }],
+          6,
+        ),
+      ],
+      1,
+    );
+
+    const next = mergeThreadSnapshot(previous, recent, true);
+    expect(next.messages.map((item) => item.id)).toEqual(["m-0", "m-1", "tool:exec-1"]);
+  });
+
   it("does not overwrite a completed tool with a later running event", () => {
     const initial = snapshot([
       message("tool:exec-1", [

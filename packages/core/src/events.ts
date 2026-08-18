@@ -29,6 +29,9 @@ export function projectMessages(
           durableSubagents.add(block.agentId);
           liveSubagents.delete(block.agentId);
         }
+        if (block.kind === "tool") {
+          liveTools.delete(block.executionId);
+        }
       }
       messages.push({
         id: (payload.messageId as string) ?? event.id,

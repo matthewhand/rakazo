@@ -179,6 +179,48 @@ describe("projectMessages", () => {
     ]);
     expect(messages[0]?.blocks[0]).toMatchObject({ status: "completed", result: "ok" });
   });
+
+  it("drops a live tool pill once a durable tool message arrives", () => {
+    const messages = projectMessages([
+      {
+        id: "e1",
+        threadId: "t1",
+        seq: 0,
+        type: "agent.tool.called",
+        runId: "r1",
+        payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: "e2",
+        threadId: "t1",
+        seq: 1,
+        type: "thread.message.created",
+        runId: "r1",
+        payload: {
+          messageId: "m1",
+          role: "bot",
+          blocks: [
+            {
+              kind: "tool",
+              executionId: "exec-1",
+              name: "notes.write",
+              status: "completed",
+              result: "Wrote note",
+            },
+          ],
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("m1");
+    expect(messages[0]?.blocks[0]).toMatchObject({
+      kind: "tool",
+      status: "completed",
+      result: "Wrote note",
+    });
+  });
 });
 
 describe("createStreamingRedactor", () => {

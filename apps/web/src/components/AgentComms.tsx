@@ -205,7 +205,7 @@ function shortToolName(name: string) {
   return parts[parts.length - 1] || name;
 }
 
-function redactDisplayedArgs(args: Record<string, unknown>) {
+export function redactDisplayedArgs(args: Record<string, unknown>) {
   return JSON.stringify(args, null, 2)
     .replace(/sk-or-v1-[a-zA-Z0-9]+/g, "[redacted]")
     .replace(/sk-[a-zA-Z0-9-]+/g, "[redacted]")

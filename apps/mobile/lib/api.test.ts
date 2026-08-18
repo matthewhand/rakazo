@@ -241,6 +241,26 @@ describe("mobile thread event reduction", () => {
     expect(next?.messages[1]?.blocks).toEqual([completed]);
   });
 
+  it("does not overwrite a completed mobile tool pill with a later running event", () => {
+    const completed = applyMobileThreadEvent(snapshot(), {
+      type: "agent.tool.called",
+      payload: {
+        name: "notes.write",
+        executionId: "exec-1",
+        status: "completed",
+        result: "Wrote note",
+      },
+    });
+    const next = applyMobileThreadEvent(completed, {
+      type: "agent.tool.called",
+      payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+    });
+    expect(next?.messages[0]?.blocks[0]).toMatchObject({
+      status: "completed",
+      result: "Wrote note",
+    });
+  });
+
   it("projects tool calls as live pills", () => {
     const next = applyMobileThreadEvent(snapshot(), {
       type: "agent.tool.called",
