@@ -1,9 +1,14 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   McpClient,
   parseMcpConfig,
   parseMcpConfigFromEnv,
   isMcpEnabled,
+  matchMcpServer,
+  mergeMcpServerSecrets,
   type McpClientConfig,
 } from "./mcp-client.js";
 import { McpEmulator } from "./mcp-emulator.js";
@@ -157,6 +162,60 @@ describe("McpClient", () => {
     const tools = await client.discoverTools(mockContext);
     expect(tools[0]?.name).toContain("server-a.");
   });
+
+  it("does not connect or advertise tools for disabled servers", async () => {
+    const config: McpClientConfig = {
+      servers: [
+        { name: "live", type: "sse", url: `http://127.0.0.1:${port}` },
+        { name: "off", type: "sse", url: `http://127.0.0.1:${port}`, disabled: true },
+      ],
+    };
+    client = new McpClient(config);
+    const tools = await client.discoverTools(mockContext);
+    expect(tools.map((tool) => tool.name)).toEqual(["live.notes.write"]);
+    const status = await client.getServerStatus();
+    expect(status).toEqual([
+      expect.objectContaining({ name: "live", status: "connected", toolCount: 1 }),
+      expect.objectContaining({ name: "off", status: "disabled", toolCount: 0 }),
+    ]);
+  });
+
+  it("rejects execute against a disabled server instead of opening a transport", async () => {
+    client = new McpClient({
+      servers: [{ name: "off", type: "sse", url: `http://127.0.0.1:${port}`, disabled: true }],
+    });
+    await client.initialize();
+    const events: Array<{ type: string; message?: string }> = [];
+    for await (const event of client.execute(
+      { tool: "off.notes.write", args: {}, executionId: "disabled-exec" },
+      mockContext,
+    )) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { type: "error", message: "MCP server off not found or not connected" },
+    ]);
+    expect(emulator.writes).toHaveLength(0);
+  });
+
+  it("reloads from a new config and drops the previous server", async () => {
+    client = new McpClient({
+      servers: [{ name: "old", type: "sse", url: `http://127.0.0.1:${port}` }],
+    });
+    await client.initialize();
+    expect((await client.discoverTools(mockContext)).map((tool) => tool.name)).toEqual([
+      "old.notes.write",
+    ]);
+
+    await client.reload({
+      servers: [{ name: "new", type: "sse", url: `http://127.0.0.1:${port}` }],
+    });
+    expect((await client.discoverTools(mockContext)).map((tool) => tool.name)).toEqual([
+      "new.notes.write",
+    ]);
+    expect(client.ownsTool("old.notes.write")).toBe(false);
+    expect(client.ownsTool("new.notes.write")).toBe(true);
+  });
 });
 
 describe("parseMcpConfig", () => {
@@ -184,6 +243,35 @@ describe("parseMcpConfig", () => {
 
   it("should handle malformed JSON in MCP_SERVERS", () => {
     const config = parseMcpConfigFromEnv({ MCP_SERVERS: "not json" });
+    expect(config.servers).toHaveLength(0);
+  });
+
+  it("loads Cursor-shaped servers from MCP_CONFIG_PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rakazo-mcp-"));
+    const path = join(dir, "mcp.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        mcpServers: {
+          notes: { url: "http://127.0.0.1:3000", headers: { Authorization: "Bearer x" } },
+        },
+      }),
+    );
+    const config = parseMcpConfigFromEnv({ MCP_CONFIG_PATH: path });
+    expect(config.servers).toEqual([
+      expect.objectContaining({
+        name: "notes",
+        type: "http",
+        url: "http://127.0.0.1:3000",
+        headers: { Authorization: "Bearer x" },
+      }),
+    ]);
+  });
+
+  it("returns an empty config when MCP_CONFIG_PATH is unreadable", () => {
+    const config = parseMcpConfigFromEnv({
+      MCP_CONFIG_PATH: join(tmpdir(), "rakazo-mcp-missing", "nope.json"),
+    });
     expect(config.servers).toHaveLength(0);
   });
 
@@ -281,6 +369,30 @@ describe("isMcpEnabled", () => {
   });
 });
 
+describe("matchMcpServer", () => {
+  const servers = [
+    { name: "notes", type: "http" as const, url: "http://127.0.0.1" },
+    { name: "notes.extra", type: "http" as const, url: "http://127.0.0.1" },
+    { name: "off", type: "http" as const, url: "http://127.0.0.1", disabled: true },
+  ];
+
+  it("picks the longest matching server name", () => {
+    expect(matchMcpServer(servers, "notes.extra.write")?.name).toBe("notes.extra");
+    expect(matchMcpServer(servers, "notes.write")?.name).toBe("notes");
+    expect(matchMcpServer(servers, "notes")?.name).toBe("notes");
+  });
+
+  it("skips disabled servers unless includeDisabled is set", () => {
+    expect(matchMcpServer(servers, "off.write")).toBeUndefined();
+    expect(matchMcpServer(servers, "off.write", { includeDisabled: true })?.name).toBe("off");
+  });
+
+  it("does not treat a sibling prefix as a match", () => {
+    expect(matchMcpServer(servers, "notesextra.write")).toBeUndefined();
+    expect(matchMcpServer(servers, "gmail.send")).toBeUndefined();
+  });
+});
+
 describe("normalizeMcpServers", () => {
   it("accepts Cursor-shaped objects", async () => {
     const { normalizeMcpServers } = await import("./mcp-client.js");
@@ -344,5 +456,42 @@ describe("secret helpers", () => {
     expect(child.TOKEN).toBe("x");
     expect(child.DATABASE_URL).toBeUndefined();
     expect(child.ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  it("does not copy secrets onto a differently named server", () => {
+    const merged = mergeMcpServerSecrets(
+      [{ name: "other", type: "http", url: "http://127.0.0.1:3000" }],
+      [
+        {
+          name: "notes",
+          type: "http",
+          url: "http://127.0.0.1:3000",
+          headers: { Authorization: "Bearer secret" },
+        },
+      ],
+    );
+    expect(merged[0]?.headers).toBeUndefined();
+  });
+
+  it("lets an explicit blank replacement drop stored secrets", () => {
+    const merged = mergeMcpServerSecrets(
+      [
+        {
+          name: "notes",
+          type: "http",
+          url: "http://127.0.0.1:3000",
+          headers: {},
+        },
+      ],
+      [
+        {
+          name: "notes",
+          type: "http",
+          url: "http://127.0.0.1:3000",
+          headers: { Authorization: "Bearer secret" },
+        },
+      ],
+    );
+    expect(merged[0]?.headers).toEqual({});
   });
 });

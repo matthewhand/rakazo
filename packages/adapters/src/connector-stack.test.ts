@@ -79,6 +79,19 @@ describe("CompositeConnector routing", () => {
     );
     expect(events).toEqual([{ type: "result", data: { from: "notes" } }]);
   });
+
+  it("discovers destination tools even when MCP also reports tools", async () => {
+    const destination = new DestinationEmulator();
+    const connector = new CompositeConnector(
+      destination,
+      undefined,
+      fakeMcp({ owns: () => true, label: "notes" }),
+    );
+    const tools = await connector.discoverTools(context);
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["destination.write", "notes.write"]),
+    );
+  });
 });
 
 describe("createConnectorStack", () => {
