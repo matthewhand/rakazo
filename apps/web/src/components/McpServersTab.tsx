@@ -43,6 +43,7 @@ export function McpServersTab({
   async function saveServers(
     next: Array<McpServerPublic | Parameters<typeof rpc.mcp.update>[0]["servers"][number]>,
   ) {
+    if (!canManage) return;
     setSaving(true);
     setError(null);
     try {
@@ -92,8 +93,11 @@ export function McpServersTab({
         )
         .catch(() => undefined);
     }, 5000);
-    return () => window.clearInterval(interval);
-  }, []);
+    return () => {
+      window.clearInterval(interval);
+      onEditorOpenChange?.(false);
+    };
+  }, [onEditorOpenChange]);
 
   if (loading) {
     return (

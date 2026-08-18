@@ -35,7 +35,7 @@ The easiest way to configure MCP servers is through the web interface:
    - **Optional**: Headers, environment variables, arguments
 6. Save
 
-Only the deployment owner can add, edit, disable, or delete servers. Other signed-in members can open the tab and see status. Saving reloads the API MCP client immediately. The worker picks up the new list on the next tool discovery. Env and file configs still apply on process start. List responses omit headers and env (`hasHeaders` / `hasEnv`).
+Only the deployment owner can add, edit, disable, or delete servers. Other signed-in members can open the tab and see status. Saving reloads the API MCP client immediately. The worker picks up the new list on the next tool discovery. The Plugins list is the database set only; env and file servers still merge in at process start and win on a name clash. List responses omit headers and env (`hasHeaders` / `hasEnv`). Persistence is Prisma migration `0010_mcp_servers`.
 
 ### Option 2: Environment Variable
 

@@ -232,9 +232,16 @@ export const McpServerConfigSchema = z.object({
 });
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
-export const McpServersListSchema = z.object({
-  servers: z.array(McpServerConfigSchema),
-});
+export const McpServersListSchema = z
+  .object({
+    servers: z.array(McpServerConfigSchema),
+  })
+  .superRefine((value, ctx) => {
+    const names = value.servers.map((server) => server.name);
+    if (new Set(names).size !== names.length) {
+      ctx.addIssue({ code: "custom", message: "MCP server names must be unique" });
+    }
+  });
 export type McpServersList = z.infer<typeof McpServersListSchema>;
 
 export const McpServerPublicSchema = McpServerConfigSchema.omit({

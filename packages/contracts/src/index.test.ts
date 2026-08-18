@@ -4,6 +4,7 @@ import {
   CreateBotInput,
   McpServerConfigSchema,
   McpServerPublicSchema,
+  McpServersListSchema,
   McpServersPublicListSchema,
   ProductEventType,
 } from "./index.js";
@@ -41,6 +42,14 @@ describe("MCP public contracts", () => {
     );
     expect(() => McpServerConfigSchema.parse({ name: "notes extra", type: "http" })).toThrow();
     expect(() => McpServerConfigSchema.parse({ name: "", type: "stdio" })).toThrow();
+    expect(() =>
+      McpServersListSchema.parse({
+        servers: [
+          { name: "notes", type: "http" },
+          { name: "notes", type: "sse" },
+        ],
+      }),
+    ).toThrow(/unique/i);
   });
 
   it("strips headers and env from the list schema so clients cannot read secrets", () => {
