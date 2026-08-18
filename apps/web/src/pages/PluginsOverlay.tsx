@@ -233,7 +233,11 @@ export function PluginsOverlay({
                 </button>
               ))}
             </div>
-            <div className="rk-scroll min-h-0 flex-1 overflow-y-auto px-8 py-6">
+            <div
+              id="plugin-list"
+              role="tabpanel"
+              className="rk-scroll min-h-0 flex-1 overflow-y-auto px-8 py-6"
+            >
               {error ? <p className="mb-4 text-sm text-[#C94244]">{error}</p> : null}
               {!loading && !error && catalog.length === 0 ? (
                 <p className="text-[#6C6C70]">Composio is not configured on this deployment.</p>

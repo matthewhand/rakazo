@@ -21,6 +21,18 @@ test("two users are isolated and a bot completes durable work", async ({ browser
   await completeOnboarding(pageA, ["A bit of everything", "Clear and tight"], testInfo);
   await expect(pageA.getByText("Chief").first()).toBeVisible();
 
+  await pageA.getByText("Plugins").click();
+  await expect(pageA.getByPlaceholder("Search apps")).toBeVisible();
+  await pageA.getByRole("tab", { name: "MCP servers" }).click();
+  await expect(pageA.getByRole("heading", { name: "No MCP servers configured" })).toBeVisible();
+  await expect(pageA.getByRole("button", { name: "Add your first server" })).toBeVisible();
+  await captureScreenshot(pageA, testInfo, "11c-mcp-servers-owner");
+  await pageA.getByRole("button", { name: "Add your first server" }).click();
+  await expect(pageA.getByRole("heading", { name: "Add server" })).toBeVisible();
+  await captureScreenshot(pageA, testInfo, "11d-mcp-server-editor");
+  await pageA.getByRole("button", { name: "Close plugins" }).click();
+  await expect(pageA.getByPlaceholder("Search apps")).toHaveCount(0);
+
   await signup(pageB, `bob-${stamp}@rakazo.test`, "password12", "Bob");
   await completeOnboarding(pageB, ["Coding & repos", "Clear and tight"]);
   await expect(pageB.getByText("Chief").first()).toBeVisible();
@@ -110,6 +122,11 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await page.getByRole("tab", { name: "All", exact: true }).click();
   await expect(page.getByText("Gmail", { exact: true })).toBeVisible();
   await expect(gmailRow.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "MCP servers" }).click();
+  await expect(page.getByText(/MCP servers/i).first()).toBeVisible();
+  await expect(page.getByText(/No MCP servers configured|Only the deployment owner/i)).toBeVisible();
+  await captureScreenshot(page, testInfo, "11c-mcp-servers");
   await page.getByRole("button", { name: "Close plugins" }).click();
 
   await page.getByText("Chief").first().click();
