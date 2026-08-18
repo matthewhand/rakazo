@@ -668,12 +668,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
           if (deps.connector) {
             let result: unknown = { error: `unknown tool ${name}` };
+            let connectorFailed = false;
             for await (const event of deps.connector.execute(
               { tool: name, args, executionId },
               context,
             )) {
               if (event.type === "result") {
                 result = event.data;
+                connectorFailed = false;
                 const logIds = collectLogIds(event.data);
                 for (const logId of logIds) {
                   await deps.events.append({
@@ -686,12 +688,21 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   });
                 }
               }
-              if (event.type === "error") result = { error: event.message };
+              if (event.type === "error") {
+                result = { error: event.message };
+                connectorFailed = true;
+              }
             }
-            return finish(result);
+            const finished = await finish(result);
+            if (connectorFailed && finished && typeof finished === "object") {
+              connectorFailures.add(finished);
+            }
+            return finished;
           }
           return finish({ error: `unknown tool ${name}` });
         };
+
+        const connectorFailures = new WeakSet<object>();
 
         const applyRecordedTool = async (
           name: string,
@@ -700,11 +711,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
         ) => {
           try {
             const result = await applyTool(name, args, executionId);
+            const failed = Boolean(result && typeof result === "object" && connectorFailures.has(result));
             await recordToolStatus(
               name,
               executionId,
               args,
-              "completed",
+              failed ? "failed" : "completed",
               summarizeToolOutcome(result, runSecrets),
             );
             return result;

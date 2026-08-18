@@ -358,7 +358,11 @@ export function ShellPage() {
               }
               if (event.payload.role === "bot") markBotReadIfVisible(active.id);
             }
-            if (event.type === "run.completed") {
+            if (
+              event.type === "run.completed" ||
+              event.type === "run.failed" ||
+              event.type === "run.cancelled"
+            ) {
               void refreshThread(active.id).catch(() => undefined);
             } else if (isComputerStatusEvent(event)) {
               void refreshComputerScreen(active.id).catch(() => undefined);
