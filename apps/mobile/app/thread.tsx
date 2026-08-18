@@ -290,7 +290,9 @@ function CommsPill({
   onOpenBot: (botId: string, name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const running = block.status === "running" || (!block.status && block.kind !== "child_bot");
+  const running =
+    block.status === "running" ||
+    (!block.status && block.kind === "tool" && !("result" in block && block.result));
   const failed = block.status === "failed";
   const label = block.name || commsKindLabel(block);
   return (

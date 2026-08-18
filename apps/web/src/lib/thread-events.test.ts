@@ -153,6 +153,33 @@ describe("thread event reduction", () => {
     expect(next.messages.map((item) => item.id)).toEqual(["m-0", "m-1", "tool:exec-1"]);
   });
 
+  it("does not overwrite a durable completed tool with a later running event", () => {
+    const initial = snapshot([
+      message("durable-tool", [
+        {
+          kind: "tool",
+          executionId: "exec-1",
+          name: "notes.write",
+          status: "completed",
+          result: "Wrote note",
+        },
+      ]),
+    ]);
+    const next = reduceThreadSnapshot(
+      initial,
+      event({
+        type: "agent.tool.called",
+        seq: 5,
+        payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+      }),
+    );
+    expect(next?.messages.map((item) => item.id)).toEqual(["durable-tool"]);
+    expect(next?.messages[0]?.blocks[0]).toMatchObject({
+      status: "completed",
+      result: "Wrote note",
+    });
+  });
+
   it("does not overwrite a completed tool with a later running event", () => {
     const initial = snapshot([
       message("tool:exec-1", [

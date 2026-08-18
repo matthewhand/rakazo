@@ -70,12 +70,10 @@ export function reduceThreadSnapshot(
   }
   if (event.type === "agent.tool.called") {
     const block = toolBlockFromPayload(event.payload);
-    const existing = prev.messages.find((message) => message.id === `tool:${block.executionId}`);
-    const existingStatus =
-      existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+    const existingStatus = existingToolStatus(prev.messages, block.executionId);
     if (
       (existingStatus === "completed" || existingStatus === "failed") &&
-      block.status === "running"
+      (block.status === "running" || !block.status)
     ) {
       return { ...prev, cursor: event.seq };
     }
@@ -191,4 +189,13 @@ function replacedTool(message: ThreadMessage, executionIds: ReadonlySet<string>)
   return message.blocks.some(
     (block) => block.kind === "tool" && executionIds.has(block.executionId),
   );
+}
+
+function existingToolStatus(messages: readonly ThreadMessage[], executionId: string) {
+  for (const message of messages) {
+    for (const block of message.blocks) {
+      if (block.kind === "tool" && block.executionId === executionId) return block.status;
+    }
+  }
+  return undefined;
 }

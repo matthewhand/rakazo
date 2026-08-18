@@ -314,13 +314,13 @@ export function applyMobileThreadEvent(
     const executionId = String(
       event.payload?.executionId ?? event.payload?.name ?? event.id ?? "tool",
     );
-    const existing = prev.messages.find((message) => message.id === `tool:${executionId}`);
-    const existingStatus =
-      existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+    const existingStatus = prev.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.kind === "tool" && block.executionId === executionId)?.status;
     const nextStatus = String(event.payload?.status ?? "running");
     if (
       (existingStatus === "completed" || existingStatus === "failed") &&
-      nextStatus === "running"
+      (nextStatus === "running" || !event.payload?.status)
     ) {
       return prev;
     }
@@ -399,6 +399,12 @@ export function applyMobileThreadEvent(
               message.id.startsWith("subagent:") &&
               next.blocks.some(
                 (block) => block.kind === "subagent" && message.id === `subagent:${block.agentId}`,
+              )
+            ) &&
+            !(
+              message.id.startsWith("tool:") &&
+              next.blocks.some(
+                (block) => block.kind === "tool" && message.id === `tool:${block.executionId}`,
               )
             ),
         ),

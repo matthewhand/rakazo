@@ -668,14 +668,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
           if (deps.connector) {
             let result: unknown = { error: `unknown tool ${name}` };
-            let connectorFailed = false;
             for await (const event of deps.connector.execute(
               { tool: name, args, executionId },
               context,
             )) {
               if (event.type === "result") {
                 result = event.data;
-                connectorFailed = false;
                 const logIds = collectLogIds(event.data);
                 for (const logId of logIds) {
                   await deps.events.append({
@@ -690,19 +688,32 @@ export function createRunExecutor(deps: ExecutorDeps) {
               }
               if (event.type === "error") {
                 result = { error: event.message };
-                connectorFailed = true;
               }
             }
-            const finished = await finish(result);
-            if (connectorFailed && finished && typeof finished === "object") {
-              connectorFailures.add(finished);
-            }
-            return finished;
+            return finish(result);
           }
           return finish({ error: `unknown tool ${name}` });
         };
 
-        const connectorFailures = new WeakSet<object>();
+        const persistTool = async (
+          name: string,
+          executionId: string,
+          args: Record<string, unknown>,
+          status: "completed" | "failed",
+          result?: string,
+        ) => {
+          await recordToolStatus(name, executionId, args, status, result);
+          await publishMessage(deps, run, "bot", [
+            {
+              kind: "tool",
+              executionId,
+              name,
+              args: redactRecord(args, runSecrets),
+              status,
+              result,
+            },
+          ]);
+        };
 
         const applyRecordedTool = async (
           name: string,
@@ -711,10 +722,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
         ) => {
           try {
             const result = await applyTool(name, args, executionId);
-            const failed = Boolean(
-              result && typeof result === "object" && connectorFailures.has(result),
-            );
-            await recordToolStatus(
+            const failed = isToolFailure(result);
+            await persistTool(
               name,
               executionId,
               args,
@@ -724,7 +733,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             return result;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            await recordToolStatus(
+            await persistTool(
               name,
               executionId,
               args,
@@ -1367,6 +1376,15 @@ async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Pr
     release();
     if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
   }
+}
+
+function isToolFailure(result: unknown): boolean {
+  return Boolean(
+    result &&
+      typeof result === "object" &&
+      "error" in result &&
+      (result as { error: unknown }).error,
+  );
 }
 
 function summarizeToolOutcome(result: unknown, secrets: string[]): string | undefined {

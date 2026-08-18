@@ -1578,7 +1578,7 @@ export function createRouter(deps: RouterDeps) {
 async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<ThreadSnapshot> {
   const bot = await createRepos(deps.prisma).getBot(actor, botId);
   if (!bot.thread) throw new IsolationError();
-  const [messagePage, run, last, finishedRun] = await Promise.all([
+  const [messagePage, run, last] = await Promise.all([
     loadMessagePage(deps.prisma, bot.thread.id, undefined, THREAD_MESSAGE_PAGE_SIZE),
     deps.prisma.run.findFirst({
       where: {
@@ -1592,24 +1592,13 @@ async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<
       orderBy: { seq: "desc" },
       select: { seq: true },
     }),
-    deps.prisma.run.findFirst({
-      where: { botId, status: { in: ["completed", "failed", "cancelled"] } },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
-    }),
   ]);
-  const liveRunId = run?.id;
-  const toolRunId = liveRunId ?? finishedRun?.id;
-  const liveEvents = toolRunId
+  const liveEvents = run
     ? await deps.prisma.event.findMany({
         where: {
           threadId: bot.thread.id,
-          runId: toolRunId,
-          type: {
-            in: liveRunId
-              ? ["thread.progress", "thread.subagent", "agent.tool.called"]
-              : ["agent.tool.called"],
-          },
+          runId: run.id,
+          type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
         },
         orderBy: { seq: "asc" },
       })

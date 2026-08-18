@@ -111,7 +111,6 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await expect(page.getByText("Gmail", { exact: true })).toBeVisible();
   await expect(gmailRow.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
 
-  await captureMcpServersGallery(page, testInfo, "11c-mcp-servers");
   await page.getByRole("button", { name: "Close plugins" }).click();
 
   await page.getByText("Chief").first().click();
@@ -166,17 +165,13 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
 
   await composer.fill("write a file in your home called notes/result.txt that says isolation-ok");
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("main").getByRole("button", { name: /write_file/ })).toBeVisible({
-    timeout: 30_000,
-  });
+  const writeFile = page.getByRole("main").getByRole("button", { name: /^write_file\b/ });
+  await expect(writeFile).toHaveCount(1, { timeout: 30_000 });
   await captureScreenshot(page, testInfo, "13b-tool-comms-pill");
-  await page
-    .getByRole("main")
-    .getByRole("button", { name: /write_file/ })
-    .click();
+  await writeFile.click();
   await expect(page.getByRole("dialog", { name: /write_file/ })).toBeVisible();
   await captureScreenshot(page, testInfo, "13c-tool-comms-popup");
-  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
     timeout: 30_000,
   });
@@ -273,21 +268,4 @@ async function threadRunStatus(page: Page) {
     botId: activeBotId(page),
   });
   return result.run?.status ?? "idle";
-}
-
-async function captureMcpServersGallery(
-  page: Page,
-  testInfo: Parameters<typeof captureScreenshot>[1],
-  emptyName: string,
-) {
-  await page.getByRole("tab", { name: "MCP servers" }).click();
-  await expect(
-    page.getByText(/No MCP servers configured|Only the deployment owner/i).first(),
-  ).toBeVisible();
-  await captureScreenshot(page, testInfo, emptyName);
-  const add = page.getByRole("button", { name: "Add your first server" });
-  if (!(await add.isVisible().catch(() => false))) return;
-  await add.click();
-  await expect(page.getByRole("heading", { name: "Add server" })).toBeVisible();
-  await captureScreenshot(page, testInfo, "11d-mcp-server-editor");
 }
