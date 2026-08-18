@@ -81,7 +81,7 @@ function AgentCommsPopup({
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4">
       <button
         type="button"
-        aria-label="Close"
+        aria-label="Dismiss comms"
         className="absolute inset-0 cursor-default"
         onClick={onClose}
       />
