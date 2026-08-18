@@ -216,6 +216,45 @@ export const DeploymentSettingsSchema = z.object({
   canChooseHostComputer: z.boolean(),
 });
 
+export const McpServerConfigSchema = z.object({
+  name: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._-]+$/),
+  type: z.enum(["stdio", "sse", "http"]),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  url: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  disabled: z.boolean().optional(),
+});
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
+export const McpServersListSchema = z.object({
+  servers: z.array(McpServerConfigSchema),
+});
+export type McpServersList = z.infer<typeof McpServersListSchema>;
+
+export const McpServerPublicSchema = McpServerConfigSchema.omit({
+  headers: true,
+  env: true,
+}).extend({
+  hasHeaders: z.boolean(),
+  hasEnv: z.boolean(),
+});
+export type McpServerPublic = z.infer<typeof McpServerPublicSchema>;
+
+export const McpServersPublicListSchema = z.object({
+  servers: z.array(McpServerPublicSchema),
+});
+export type McpServersPublicList = z.infer<typeof McpServersPublicListSchema>;
+
+export const McpServerStatusSchema = z.object({
+  name: z.string(),
+  status: z.enum(["connected", "error", "disabled"]),
+  toolCount: z.number(),
+  error: z.string().optional(),
+});
+export type McpServerStatus = z.infer<typeof McpServerStatusSchema>;
+
 export const MeSchema = z.object({
   userId: Id,
   email: z.string().email(),

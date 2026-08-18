@@ -40,7 +40,7 @@ CI runs `pnpm lint`, `pnpm check`, production builds (including Electron preload
 
 The product path is **Pi + Docker + Graphile**. Emulator settings (`AGENT_RUNTIME=scripted`, `SANDBOX_PROVIDER=fake`, `WAKEUP_DRIVER=memory`) are for tests only.
 
-**Plugins** integrate via [Composio](https://composio.dev/) (optional `COMPOSIO_API_KEY`). Rakazo does not ship a Git- or MCP-based plugin marketplace.
+**Plugins** integrate via [Composio](https://composio.dev/) (optional `COMPOSIO_API_KEY`). Deployments can also attach optional native [MCP](https://modelcontextprotocol.io) servers from Plugins or `MCP_SERVERS` / `MCP_CONFIG_PATH`. Rakazo does not ship a Git-based plugin marketplace.
 
 ## Pull requests
 

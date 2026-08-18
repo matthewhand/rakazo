@@ -1156,7 +1156,12 @@ export function ShellPage() {
           />
         ) : null}
 
-        {pluginsOpen ? <PluginsOverlay onClose={() => setPluginsOpen(false)} /> : null}
+        {pluginsOpen ? (
+          <PluginsOverlay
+            onClose={() => setPluginsOpen(false)}
+            canManage={Boolean(bootstrapMe?.isDeploymentOwner)}
+          />
+        ) : null}
       </Suspense>
 
       <Suspense fallback={null}>

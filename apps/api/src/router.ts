@@ -24,6 +24,8 @@ import {
   expireComputerControl,
   hasActiveComputerControl,
   listPiCatalog,
+  type McpClient,
+  normalizeMcpServers,
   type PiOAuthLogins,
   provisionComputer,
   releaseComputerExecutionLease,
@@ -89,7 +91,7 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   composio?: ComposioProvider;
-  mcpClient?: unknown;
+  mcpClient?: McpClient;
   reloadMcp?: () => Promise<void>;
   dataDir: string;
   env: {
@@ -1511,6 +1513,81 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
     },
+    mcp: {
+      list: authed.mcp.list.handler(async () => {
+        const stored = await readStoredMcpServers(deps.prisma);
+        return {
+          servers: stored.map((server) => ({
+            name: server.name,
+            type: server.type,
+            command: server.command,
+            args: server.args,
+            url: server.url,
+            disabled: server.disabled,
+            hasHeaders: Boolean(server.headers && Object.keys(server.headers).length > 0),
+            hasEnv: Boolean(server.env && Object.keys(server.env).length > 0),
+          })),
+        };
+      }),
+      update: authed.mcp.update.handler(async ({ context, input }) => {
+        if (!context.actor.isDeploymentOwner) {
+          throw new ORPCError("FORBIDDEN");
+        }
+        const names = input.servers.map((server) => server.name);
+        if (new Set(names).size !== names.length) {
+          throw new ORPCError("BAD_REQUEST");
+        }
+        for (const server of input.servers) {
+          if (server.type === "stdio" && !server.command?.trim()) {
+            throw new ORPCError("BAD_REQUEST");
+          }
+          if ((server.type === "http" || server.type === "sse") && !server.url?.trim()) {
+            throw new ORPCError("BAD_REQUEST");
+          }
+        }
+        const existing = await readStoredMcpServers(deps.prisma);
+        const previous = new Map(existing.map((server) => [server.name, server]));
+        const removed = existing.filter(
+          (server) => !input.servers.some((next) => next.name === server.name),
+        );
+        const added = input.servers.filter(
+          (server) => !existing.some((prior) => prior.name === server.name),
+        );
+        if (removed.length === 1 && added.length === 1 && removed[0] && added[0]) {
+          previous.set(added[0].name, removed[0]);
+        }
+        const merged = input.servers.map((server) => {
+          const prior = previous.get(server.name);
+          return {
+            ...server,
+            headers: server.headers ?? prior?.headers,
+            env: server.env ?? prior?.env,
+          };
+        });
+        const serialized = JSON.stringify(merged);
+        await deps.prisma.deploymentSettings.upsert({
+          where: { id: "default" },
+          create: { id: "default", mcpServers: serialized },
+          update: { mcpServers: serialized },
+        });
+        await deps.reloadMcp?.().catch((error) => {
+          console.error("[MCP] Failed to reload after update:", error);
+        });
+        return { ok: true as const };
+      }),
+      status: authed.mcp.status.handler(async () => {
+        if (!deps.mcpClient) {
+          return { servers: [] };
+        }
+        try {
+          const statuses = await deps.mcpClient.getServerStatus();
+          return { servers: statuses };
+        } catch (error) {
+          console.error("[MCP] Failed to get server status:", error);
+          return { servers: [] };
+        }
+      }),
+    },
   });
 }
 
@@ -1537,7 +1614,7 @@ async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<
         where: {
           threadId: bot.thread.id,
           runId: run.id,
-          type: { in: ["thread.progress", "thread.subagent"] },
+          type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
         },
         orderBy: { seq: "asc" },
       })
@@ -1546,12 +1623,21 @@ async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<
   const persisted = messagePage.messages;
   const live = projected.filter((message) => {
     if (message.blocks.some((block) => block.kind === "progress")) return true;
-    if (!message.id.startsWith("subagent:")) return false;
-    return !persisted.some((row) =>
-      row.blocks.some(
-        (block) => block.kind === "subagent" && message.id === `subagent:${block.agentId}`,
-      ),
-    );
+    if (message.id.startsWith("subagent:")) {
+      return !persisted.some((row) =>
+        row.blocks.some(
+          (block) => block.kind === "subagent" && message.id === `subagent:${block.agentId}`,
+        ),
+      );
+    }
+    if (message.id.startsWith("tool:")) {
+      return !persisted.some((row) =>
+        row.blocks.some(
+          (block) => block.kind === "tool" && message.id === `tool:${block.executionId}`,
+        ),
+      );
+    }
+    return false;
   });
   const messages = [...persisted, ...live];
   return {
@@ -1676,6 +1762,19 @@ function toComputerStatus(
     homeRevision: computer?.homeRevision ?? null,
     busyBotName: null,
   };
+}
+
+async function readStoredMcpServers(prisma: PrismaClient) {
+  const settings = await prisma.deploymentSettings.findUnique({
+    where: { id: "default" },
+    select: { mcpServers: true },
+  });
+  if (!settings?.mcpServers) return [];
+  try {
+    return normalizeMcpServers(JSON.parse(settings.mcpServers));
+  } catch {
+    return [];
+  }
 }
 
 async function deploymentDto(prisma: PrismaClient, sandboxProvider: string) {
