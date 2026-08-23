@@ -16,6 +16,10 @@ services:
       retries: 20
 
   supervisor:
+    image: compose-api
+    user: "0"
+    working_dir: /app/infra/sandboxes/supervisor
+    command: [pnpm, start]
     build:
       context: ../..
       dockerfile: infra/sandboxes/supervisor/Dockerfile
@@ -50,6 +54,7 @@ services:
       - ../../data:/data
 
   api:
+    user: "0"
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile
@@ -74,6 +79,7 @@ services:
         condition: service_completed_successfully
 
   worker:
+    user: "0"
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile
@@ -100,6 +106,8 @@ services:
       context: ../..
       dockerfile: infra/compose/Dockerfile
     command: ["pnpm", "--filter", "@rakazo/web", "preview", "--host", "0.0.0.0", "--port", "5173"]
+    env_file:
+      - ../../.env
     environment:
       API_PROXY_TARGET: http://api:3100
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
@@ -111,3 +119,6 @@ services:
 
 volumes:
   pgdata:
+
+
+
