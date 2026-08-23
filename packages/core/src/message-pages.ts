@@ -68,5 +68,9 @@ export function mergeMessagesById<T extends { id: string }>(
 }
 
 function isDurableMessage(message: { id: string }): boolean {
-  return !message.id.startsWith("progress:") && !message.id.startsWith("subagent:");
+  return (
+    !message.id.startsWith("progress:") &&
+    !message.id.startsWith("subagent:") &&
+    !message.id.startsWith("tool:")
+  );
 }

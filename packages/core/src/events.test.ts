@@ -128,6 +128,58 @@ describe("projectMessages", () => {
     expect(durable[0]?.blocks[0]).toMatchObject({ status: "completed", result: "ok" });
   });
 
+  it("replays tool calls as live pills", () => {
+    const messages = projectMessages([
+      {
+        id: "e1",
+        threadId: "t1",
+        seq: 0,
+        type: "agent.tool.called",
+        runId: "r1",
+        payload: {
+          name: "notes.write",
+          executionId: "exec-1",
+          args: { path: "hello.md" },
+          status: "completed",
+          result: "Wrote note",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("tool:exec-1");
+    expect(messages[0]?.blocks[0]).toMatchObject({
+      kind: "tool",
+      name: "notes.write",
+      status: "completed",
+      result: "Wrote note",
+    });
+  });
+
+  it("does not downgrade a completed tool back to running", () => {
+    const messages = projectMessages([
+      {
+        id: "e1",
+        threadId: "t1",
+        seq: 0,
+        type: "agent.tool.called",
+        runId: "r1",
+        payload: { name: "notes.write", executionId: "exec-1", status: "completed", result: "ok" },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: "e2",
+        threadId: "t1",
+        seq: 1,
+        type: "agent.tool.called",
+        runId: "r1",
+        payload: { name: "notes.write", executionId: "exec-1", status: "running" },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+    ]);
+    expect(messages[0]?.blocks[0]).toMatchObject({ status: "completed", result: "ok" });
+  });
+
   it("drops prior history when a later clear event is replayed", () => {
     const messages = projectMessages([
       {

@@ -14,6 +14,7 @@ export function projectMessages(
   const messages: ThreadMessage[] = [];
   let streaming: ThreadMessage | null = null;
   const liveSubagents = new Map<string, ThreadMessage>();
+  const liveTools = new Map<string, ThreadMessage>();
   const durableSubagents = new Set<string>();
   for (const event of events) {
     const payload = asRecord(event.payload);
@@ -79,6 +80,28 @@ export function projectMessages(
       });
       continue;
     }
+    if (event.type === "agent.tool.called") {
+      const block = toolBlockFromPayload(payload);
+      const existing = liveTools.get(block.executionId);
+      const existingStatus =
+        existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+      if (
+        (existingStatus === "completed" || existingStatus === "failed") &&
+        block.status === "running"
+      ) {
+        continue;
+      }
+      liveTools.set(block.executionId, {
+        id: `tool:${block.executionId}`,
+        threadId: event.threadId,
+        seq: event.seq,
+        role: "bot",
+        blocks: [block],
+        runId: event.runId ?? undefined,
+        createdAt,
+      });
+      continue;
+    }
     if (
       event.type === "run.completed" ||
       event.type === "run.failed" ||
@@ -88,6 +111,7 @@ export function projectMessages(
     }
   }
   for (const live of liveSubagents.values()) messages.push(live);
+  for (const live of liveTools.values()) messages.push(live);
   if (streaming) messages.push(streaming);
   return messages;
 }
@@ -105,6 +129,24 @@ export function progressMessageText(
     : String(payload?.text ?? "");
 }
 
+export function toolBlockFromPayload(
+  payload: Record<string, unknown>,
+): Extract<MessageBlock, { kind: "tool" }> {
+  const status = payload.status;
+  const args = payload.args;
+  return {
+    kind: "tool",
+    executionId: String(payload.executionId ?? payload.name ?? "tool"),
+    name: String(payload.name ?? "tool"),
+    args:
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : undefined,
+    status: status === "completed" || status === "failed" ? status : "running",
+    result: payload.result ? String(payload.result) : undefined,
+  };
+}
+
 export function subagentBlockFromPayload(
   payload: Record<string, unknown>,
 ): Extract<MessageBlock, { kind: "subagent" }> {
@@ -118,6 +160,18 @@ export function subagentBlockFromPayload(
     progress: payload.progress ? String(payload.progress) : undefined,
     result: payload.result ? String(payload.result) : undefined,
   };
+}
+
+export function redactRecord(
+  value: Record<string, unknown> | undefined,
+  secrets: string[],
+): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(redactSecrets(JSON.stringify(value), secrets)) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 export function redactSecrets(value: string, secrets: string[]): string {
