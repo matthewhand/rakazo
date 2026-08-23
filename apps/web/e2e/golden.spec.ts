@@ -113,6 +113,8 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await page.getByRole("tab", { name: "All", exact: true }).click();
   await expect(page.getByText("Gmail", { exact: true })).toBeVisible();
   await expect(gmailRow.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+
+  await captureMcpServersGallery(page, testInfo, "11c-mcp-servers");
   await page.getByRole("button", { name: "Close plugins" }).click();
 
   await page.getByText("Chief").first().click();
@@ -128,6 +130,7 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   const settings = page.getByTestId("bot-settings");
   await expect(settings.getByRole("button", { name: "Archive bot" })).toHaveCount(0);
   await expect(settings.getByRole("button", { name: "Delete bot" })).toHaveCount(0);
+  await captureScreenshot(page, testInfo, "12-bot-settings");
   await page.getByRole("button", { name: "Close panel" }).click();
 
   await page.locator("aside").first().getByRole("button", { name: /Chief/ }).first().click({
@@ -139,7 +142,7 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await expect(page.getByRole("radio", { name: /Keep memories/ })).toBeChecked();
   await expect(page.getByRole("radio", { name: /Delete memories too/ })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
-  await captureScreenshot(page, testInfo, "12-bot-settings");
+  await captureScreenshot(page, testInfo, "12a-delete-from-context-menu");
 });
 
 test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) => {
@@ -154,7 +157,43 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
   await expect(page.getByRole("complementary").getByRole("button", { name: /Scout/ })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByRole("main").getByRole("button", { name: "Scout bot" })).toBeVisible();
   await captureScreenshot(page, testInfo, "13-spawned-bot");
+  await page.getByRole("main").getByRole("button", { name: "Scout bot" }).click();
+  await expect(page.getByRole("dialog", { name: "Scout" })).toBeVisible();
+  await captureScreenshot(page, testInfo, "13a-child-bot-comms-popup");
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await composer.fill("write a file in your home called notes/result.txt that says isolation-ok");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main").getByRole("button", { name: /write_file/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  await captureScreenshot(page, testInfo, "13b-tool-comms-pill");
+  await page.getByRole("main").getByRole("button", { name: /write_file/ }).click();
+  await expect(page.getByRole("dialog", { name: /write_file/ })).toBeVisible();
+  await captureScreenshot(page, testInfo, "13c-tool-comms-popup");
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await composer.fill("delegate to a helper to summarize venues");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main").getByRole("button", { name: /helper/i })).toBeVisible({
+    timeout: 30_000,
+  });
+  await captureScreenshot(page, testInfo, "13d-helper-comms-pill");
+  await page.getByRole("main").getByRole("button", { name: /helper/i }).click();
+  await expect(page.getByRole("dialog", { name: /helper/i })).toBeVisible();
+  await captureScreenshot(page, testInfo, "13e-helper-comms-popup");
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
 
   await page
     .getByRole("complementary")
@@ -231,6 +270,23 @@ async function threadRunStatus(page: Page) {
     botId: activeBotId(page),
   });
   return result.run?.status ?? "idle";
+}
+
+async function captureMcpServersGallery(
+  page: Page,
+  testInfo: Parameters<typeof captureScreenshot>[1],
+  emptyName: string,
+) {
+  await page.getByRole("tab", { name: "MCP servers" }).click();
+  await expect(
+    page.getByText(/No MCP servers configured|Only the deployment owner/i).first(),
+  ).toBeVisible();
+  await captureScreenshot(page, testInfo, emptyName);
+  const add = page.getByRole("button", { name: "Add your first server" });
+  if (!(await add.isVisible().catch(() => false))) return;
+  await add.click();
+  await expect(page.getByRole("heading", { name: "Add server" })).toBeVisible();
+  await captureScreenshot(page, testInfo, "11d-mcp-server-editor");
 }
 
 async function waitForBoxFramebuffer(page: Page) {

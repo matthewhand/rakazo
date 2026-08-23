@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { completeOnboarding, signup } from "./helpers";
+import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 
-test("model settings connect, replace, and cancel provider authentication", async ({ page }) => {
+test("model settings connect, replace, and cancel provider authentication", async ({
+  page,
+}, testInfo) => {
   const stamp = Date.now();
   const userName = `Models ${stamp}`;
   await signup(page, `models-${stamp}@rakazo.test`, "password12", userName);
@@ -11,6 +13,7 @@ test("model settings connect, replace, and cancel provider authentication", asyn
   await page.getByRole("button", { name: new RegExp(userName) }).click();
   await page.getByRole("button", { name: "Models", exact: true }).click();
   await expect(page.getByRole("button", { name: "Close model settings" })).toBeVisible();
+  await captureScreenshot(page, testInfo, "50-model-settings");
 
   const providerSearch = page.getByPlaceholder("Search providers");
   await providerSearch.fill("scripted");
@@ -20,6 +23,7 @@ test("model settings connect, replace, and cancel provider authentication", asyn
   await apiKeyInput.fill("fake-scripted-key-one");
   await page.getByRole("button", { name: "Connect API key" }).click();
   await expect(page.getByText(/Connected and using Scripted runtime/)).toBeVisible();
+  await captureScreenshot(page, testInfo, "51-model-connected");
 
   await page.getByLabel("Replace API key").fill("fake-scripted-key-two");
   await page.getByRole("button", { name: "Replace API key" }).click();
@@ -59,6 +63,7 @@ test("model settings connect, replace, and cancel provider authentication", asyn
     .click();
   await page.getByRole("button", { name: /Sign in with ChatGPT Plus\/Pro/ }).click();
   await expect(page.getByText("Waiting for sign-in…")).toBeVisible();
+  await captureScreenshot(page, testInfo, "52-model-oauth-pending");
 
   const cancelled = page.waitForRequest((request) =>
     request.url().includes("/rpc/models/cancelOAuth"),
