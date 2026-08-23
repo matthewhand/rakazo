@@ -22,6 +22,10 @@ function isLocalHostname(hostname: string) {
   );
 }
 
+function isEmulatorHostAlias(hostname: string) {
+  return hostname === "10.0.2.2" || hostname === "10.0.3.2";
+}
+
 export async function readScreenUrl(
   request: () => Promise<{ url: string | null }>,
   options: {
@@ -49,14 +53,21 @@ export async function readScreenUrl(
   return null;
 }
 
-/** Point a loopback noVNC URL at the same host the app uses for the API. */
+/** Signed `/novnc/` capabilities may be rewritten onto the API host (web
+ *  proxy on this machine). Raw loopback VNC is only rewritten for the
+ *  emulator's host-loopback alias — never published onto a LAN IP. */
 export function embeddableScreenUrl(url: string | null, apiBase: string): string | null {
   if (!url) return null;
   try {
-    const parsed = new URL(url);
     const api = new URL(apiBase);
+    const parsed = new URL(url, api);
+    const isProxy = parsed.pathname.startsWith("/novnc/");
     if (isLocalHostname(parsed.hostname) && !isLocalHostname(api.hostname)) {
-      parsed.hostname = api.hostname;
+      if (isProxy || isEmulatorHostAlias(api.hostname)) {
+        parsed.hostname = api.hostname;
+      } else {
+        return null;
+      }
     }
     return parsed.toString();
   } catch {

@@ -21,16 +21,31 @@ describe("embeddableScreenUrl", () => {
     expect(embeddableScreenUrl(url, "http://localhost:3100")).toBe(url);
   });
 
-  it("rewrites loopback screens onto the API host for a device or emulator", () => {
+  it("rewrites loopback screens onto the emulator host-loopback alias", () => {
     expect(
       embeddableScreenUrl(
         "http://127.0.0.1:16080/embed.html?view_only=false",
         "http://10.0.2.2:3100",
       ),
     ).toBe("http://10.0.2.2:16080/embed.html?view_only=false");
+  });
+
+  it("rewrites a signed /novnc/ capability onto the LAN API host", () => {
+    expect(
+      embeddableScreenUrl(
+        "http://127.0.0.1:5173/novnc/abc/49152/1.sig/embed.html?view_only=true",
+        "http://192.168.1.20:3100",
+      ),
+    ).toBe("http://192.168.1.20:5173/novnc/abc/49152/1.sig/embed.html?view_only=true");
+  });
+
+  it("does not publish a raw loopback VNC port onto a LAN address", () => {
     expect(
       embeddableScreenUrl("http://localhost:16080/embed.html", "http://192.168.1.20:3100"),
-    ).toBe("http://192.168.1.20:16080/embed.html");
+    ).toBeNull();
+    expect(
+      embeddableScreenUrl("http://127.0.0.1:16080/embed.html", "http://10.0.0.32:3100"),
+    ).toBeNull();
   });
 
   it("returns null when there is no screen", () => {
