@@ -29,6 +29,7 @@ export * from "./fake-sandbox.js";
 export * from "./home.js";
 export * from "./host-aware-sandbox.js";
 export * from "./job-reconciler.js";
+export * from "./mcp-client.js";
 export * from "./mcp-emulator.js";
 export * from "./openai-voice.js";
 export * from "./pi-models.js";

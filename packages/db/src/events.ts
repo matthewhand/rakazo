@@ -350,7 +350,10 @@ export async function answerRunInput(
         ? { ...block, status: "answered" as const, answer: input.answer }
         : block,
     );
-    await tx.message.update({ where: { id: message.id }, data: { blocks } });
+    await tx.message.update({
+      where: { id: message.id },
+      data: { blocks: blocks as Prisma.InputJsonValue },
+    });
     const updated = await appendEventInTransaction(tx, {
       workspaceId: input.workspaceId,
       threadId: input.threadId,
