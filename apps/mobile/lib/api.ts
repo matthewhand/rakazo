@@ -184,6 +184,8 @@ export type MobileMessage = {
     botId?: string;
     title?: string;
     agentId?: string;
+    executionId?: string;
+    args?: Record<string, unknown>;
     artifactId?: string;
     mimeType?: string;
     size?: number;
@@ -231,6 +233,9 @@ export function blockText(message: MobileMessage) {
       }
       if (block.kind === "child_bot") {
         return `${block.status === "archived" ? "Archived" : block.status === "deleted" ? "Deleted" : "Bot"} ${block.name ?? ""}`;
+      }
+      if (block.kind === "tool") {
+        return `${block.name ?? "tool"}: ${block.result || block.status || ""}`;
       }
       if (block.kind === "image") return `[image: ${block.name ?? "attachment"}]`;
       if (block.kind === "file") {
@@ -325,6 +330,43 @@ export function applyMobileThreadEvent(
       ],
     };
   }
+  if (event.type === "agent.tool.called") {
+    const executionId = String(event.payload?.executionId ?? event.payload?.name ?? event.id ?? "tool");
+    const existing = prev.messages.find((message) => message.id === `tool:${executionId}`);
+    const existingStatus = existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+    const nextStatus = String(event.payload?.status ?? "running");
+    if ((existingStatus === "completed" || existingStatus === "failed") && nextStatus === "running") {
+      return prev;
+    }
+    const streaming: MobileMessage = {
+      id: `tool:${executionId}`,
+      role: "bot",
+      blocks: [
+        {
+          kind: "tool",
+          executionId,
+          name: String(event.payload?.name ?? "tool"),
+          status: String(event.payload?.status ?? "running"),
+          result: event.payload?.result ? String(event.payload.result) : undefined,
+          args:
+            event.payload?.args && typeof event.payload.args === "object"
+              ? (event.payload.args as Record<string, unknown>)
+              : undefined,
+        },
+      ],
+    };
+    const progress = prev.messages.filter((message) => message.id.startsWith("progress:"));
+    return {
+      ...prev,
+      messages: [
+        ...prev.messages.filter(
+          (message) => message.id !== streaming.id && !message.id.startsWith("progress:"),
+        ),
+        streaming,
+        ...progress,
+      ],
+    };
+  }
   if (event.type === "thread.subagent") {
     const agentId = String(event.payload?.agentId ?? event.id ?? "live");
     const streaming: MobileMessage = {
@@ -342,6 +384,7 @@ export function applyMobileThreadEvent(
         },
       ],
     };
+    const progress = prev.messages.filter((message) => message.id.startsWith("progress:"));
     return {
       ...prev,
       messages: [
@@ -349,6 +392,7 @@ export function applyMobileThreadEvent(
           (message) => message.id !== streaming.id && !message.id.startsWith("progress:"),
         ),
         streaming,
+        ...progress,
       ],
     };
   }

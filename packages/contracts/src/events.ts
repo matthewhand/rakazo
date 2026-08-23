@@ -93,6 +93,14 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     status: z.enum(["created", "archived", "deleted"]),
   }),
   z.object({
+    kind: z.literal("tool"),
+    executionId: z.string(),
+    name: z.string(),
+    args: z.record(z.string(), z.unknown()).optional(),
+    status: z.enum(["running", "completed", "failed"]).optional(),
+    result: z.string().optional(),
+  }),
+  z.object({
     kind: z.literal("skill_draft"),
     skillId: Id,
     name: z.string(),

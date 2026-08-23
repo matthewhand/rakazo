@@ -251,6 +251,7 @@ export default function Thread() {
                 event.type === "thread.message.created" ||
                 event.type === "thread.message.updated" ||
                 event.type === "thread.subagent" ||
+                event.type === "agent.tool.called" ||
                 event.type === "thread.cleared" ||
                 event.type === "run.waiting_input"
               ) {
@@ -264,7 +265,11 @@ export default function Thread() {
               if (event.type === "thread.message.created" && event.payload?.role === "bot") {
                 markReadIfVisible();
               }
-              if (event.type === "run.completed") {
+              if (
+                event.type === "run.completed" ||
+                event.type === "run.failed" ||
+                event.type === "run.cancelled"
+              ) {
                 void refresh().catch(() => undefined);
               }
             },
@@ -547,6 +552,128 @@ export default function Thread() {
   );
 }
 
+function commsKindLabel(block: MobileMessage["blocks"][number]) {
+  if (block.kind === "subagent") {
+    if (block.status === "failed") return "failed";
+    if (block.status === "completed") return "helper";
+    return "working";
+  }
+  if (block.kind === "child_bot") {
+    if (block.status === "archived") return "archived";
+    if (block.status === "deleted") return "deleted";
+    return "bot";
+  }
+  if (block.status === "failed") return "failed";
+  return "tool";
+}
+
+function CommsPill({
+  block,
+  onOpenBot,
+}: {
+  block: MobileMessage["blocks"][number];
+  onOpenBot: (botId: string, name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const running = block.status === "running" || (!block.status && block.kind !== "child_bot");
+  const failed = block.status === "failed";
+  const label = block.name || commsKindLabel(block);
+  return (
+    <View style={{ width: "90%" }}>
+      <Pressable
+        onPress={() => setOpen((value) => !value)}
+        style={{
+          alignSelf: "flex-start",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          borderRadius: 999,
+          borderWidth: 1,
+          borderColor: "#2A2A2F",
+          backgroundColor: "#17171A",
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+        }}
+      >
+        <View
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71",
+          }}
+        />
+        <Text style={{ color: "#ECECEE", fontSize: 13, maxWidth: 180 }} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text style={{ color: "#85858A", fontSize: 12 }}>{commsKindLabel(block)}</Text>
+      </Pressable>
+      {open ? (
+        <View
+          style={{
+            marginTop: 8,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#232326",
+            backgroundColor: "#17171A",
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+          }}
+        >
+          {block.kind === "subagent" ? (
+            <>
+              {block.task ? (
+                <Text style={{ color: "#85858A", marginBottom: 8 }}>{block.task}</Text>
+              ) : null}
+              {block.result || block.progress ? (
+                <ChatMarkdown streaming={running}>
+                  {block.result || block.progress || ""}
+                </ChatMarkdown>
+              ) : (
+                <Text style={{ color: "#85858A" }}>No messages from this helper yet.</Text>
+              )}
+            </>
+          ) : null}
+          {block.kind === "child_bot" ? (
+            <>
+              <Text style={{ color: "#A8A8AD", lineHeight: 21 }}>
+                {block.status === "archived"
+                  ? "Archived this bot. Its chat, memory, and files are preserved."
+                  : block.status === "deleted"
+                    ? "Removed this bot, including its chat, computer, and memory."
+                    : block.title || "Opened its own thread. Tap to switch."}
+              </Text>
+              {block.status === "created" || !block.status ? (
+                <Pressable
+                  onPress={() => onOpenBot(block.botId ?? "", block.name ?? "Bot")}
+                  style={{ marginTop: 12 }}
+                >
+                  <Text style={{ color: "#F1F1EF" }}>Open {block.name || "bot"}</Text>
+                </Pressable>
+              ) : null}
+            </>
+          ) : null}
+          {block.kind === "tool" ? (
+            <>
+              <Text style={{ color: "#ECECEE", fontFamily: "monospace" }}>{block.name}</Text>
+              {block.args ? (
+                <Text style={{ color: "#85858A", marginTop: 8, fontFamily: "monospace" }}>
+                  {JSON.stringify(block.args, null, 2)}
+                </Text>
+              ) : null}
+              {block.result ? (
+                <View style={{ marginTop: 8 }}>
+                  <ChatMarkdown>{block.result}</ChatMarkdown>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 async function speakMessage(botId: string, message: MobileMessage) {
   const text = blockText(message);
   if (!text.trim()) return;
@@ -572,84 +699,10 @@ function MessageBubble({
   onSpeak?: () => void;
 }) {
   const special = message.blocks.find(
-    (block) => block.kind === "subagent" || block.kind === "child_bot",
+    (block) => block.kind === "subagent" || block.kind === "child_bot" || block.kind === "tool",
   );
-  if (special?.kind === "subagent") {
-    const running = special.status === "running";
-    const failed = special.status === "failed";
-    return (
-      <View
-        style={{
-          width: "90%",
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: "#232326",
-          backgroundColor: "#17171A",
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-        }}
-      >
-        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-          <Text style={{ color: "#ECECEE", fontSize: 15, fontWeight: "600" }}>
-            {special.name || "subagent"}
-          </Text>
-          <Text
-            style={{ color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71", fontSize: 13 }}
-          >
-            {running ? "subagent" : special.status}
-          </Text>
-        </View>
-        {special.task ? (
-          <Text style={{ color: "#85858A", marginTop: 8, fontSize: 13.5 }}>{special.task}</Text>
-        ) : null}
-        {special.result || special.progress ? (
-          <View style={{ marginTop: 8 }}>
-            <ChatMarkdown streaming={running}>
-              {special.result || special.progress || ""}
-            </ChatMarkdown>
-          </View>
-        ) : null}
-      </View>
-    );
-  }
-  if (special?.kind === "child_bot") {
-    const removed = special.status === "deleted" || special.status === "archived";
-    return (
-      <Pressable
-        disabled={removed}
-        onPress={() => onOpenBot(special.botId ?? "", special.name ?? "Bot")}
-        style={{
-          width: "90%",
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: "#232326",
-          backgroundColor: "#17171A",
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-          opacity: removed ? 0.6 : 1,
-        }}
-      >
-        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-          <Text style={{ color: "#ECECEE", fontSize: 15, fontWeight: "600" }}>
-            {special.name || "Bot"}
-          </Text>
-          <Text style={{ color: removed ? "#E65707" : "#4ECB71", fontSize: 13 }}>
-            {special.status === "archived"
-              ? "archived"
-              : special.status === "deleted"
-                ? "deleted"
-                : "bot"}
-          </Text>
-        </View>
-        <Text style={{ color: "#A8A8AD", marginTop: 8, fontSize: 14.5, lineHeight: 21 }}>
-          {removed
-            ? special.status === "archived"
-              ? "Archived this bot. Its chat, memory, and files are preserved."
-              : "Removed this bot, including its chat, computer, and memory."
-            : special.title || "Opened its own thread. Tap to switch."}
-        </Text>
-      </Pressable>
-    );
+  if (special) {
+    return <CommsPill block={special} onOpenBot={onOpenBot} />;
   }
   const attachments = message.blocks.filter(
     (block) => block.kind === "image" || block.kind === "file",

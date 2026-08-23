@@ -75,6 +75,7 @@ import { dictation } from "../lib/dictation";
 import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { rpc } from "../lib/rpc";
+import { embeddableScreenUrl, screenIframeSandbox } from "../lib/screen-url";
 import {
   computerPanelAutoBoot,
   isComputerStatusEvent,
@@ -87,6 +88,7 @@ import {
 } from "../lib/thread-events";
 import { speaker } from "../lib/tts";
 import type { ContextMenuPosition } from "./BotContextMenu";
+import { AgentCommsPill, isCommsBlock } from "../components/AgentComms";
 import { HostComputerPrompt } from "./HostComputerPrompt";
 import { WindowChrome } from "./WindowChrome";
 import { WorkspaceSearchResults } from "./WorkspaceSearch";
@@ -527,7 +529,12 @@ export function ShellPage() {
               }
               if (event.payload.role === "bot") markBotReadIfVisible(active.id);
             }
-            if (event.type === "run.completed" || event.type === "skill.teaching.stopped") {
+            if (
+              event.type === "run.completed" ||
+              event.type === "run.failed" ||
+              event.type === "run.cancelled" ||
+              event.type === "skill.teaching.stopped"
+            ) {
               void refreshThread(active.id).catch(() => undefined);
             } else if (isComputerStatusEvent(event)) {
               void refreshComputerScreen(active.id).catch(() => undefined);
@@ -1710,7 +1717,12 @@ export function ShellPage() {
           />
         ) : null}
 
-        {pluginsOpen ? <PluginsOverlay onClose={() => setPluginsOpen(false)} /> : null}
+        {pluginsOpen ? (
+          <PluginsOverlay
+            onClose={() => setPluginsOpen(false)}
+            canManage={Boolean(bootstrapMe?.isDeploymentOwner)}
+          />
+        ) : null}
       </Suspense>
 
       <Suspense fallback={null}>
@@ -2102,7 +2114,7 @@ function applyThreadEvent(
   setSnapshot: Dispatch<SetStateAction<ThreadSnapshot | null>>,
   setComputer: Dispatch<SetStateAction<ComputerStatus | null>>,
 ) {
-  if (isThreadSnapshotEvent(event)) {
+  if (isThreadSnapshotEvent(event) || event.type === "agent.tool.called") {
     setSnapshot((prev) => reduceThreadSnapshot(prev, event));
   }
   if (isComputerStatusEvent(event)) {
@@ -2168,76 +2180,17 @@ const MessageView = memo(function MessageView({
             </div>
           );
         }
-        if (block.kind === "subagent") {
-          const running = block.status === "running";
-          const failed = block.status === "failed";
+        if (isCommsBlock(block)) {
+          const commsKey =
+            block.kind === "subagent"
+              ? block.agentId
+              : block.kind === "tool"
+                ? block.executionId
+                : block.botId;
           return (
-            <div
-              key={i}
-              className="w-[min(420px,90%)] rounded-[18px] border border-[#232326] bg-[#17171A] px-[18px] py-4"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[15px] font-medium text-[#ECECEE]">{block.name}</span>
-                <span
-                  className="rounded-full px-[11px] py-1 text-[13px]"
-                  style={{
-                    background: failed
-                      ? "rgba(230,87,7,.14)"
-                      : running
-                        ? "rgba(245,160,60,.14)"
-                        : "rgba(48,162,75,.14)",
-                    color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71",
-                    animation: running ? "rkPulse 1.2s ease-in-out infinite" : undefined,
-                  }}
-                >
-                  {running ? "subagent" : block.status}
-                </span>
-              </div>
-              <div className="mt-2 text-[13.5px] text-[#85858A]">{block.task}</div>
-              {block.progress || block.result ? (
-                <div className="mt-2.5 text-[14.5px] leading-[1.5] text-[#A8A8AD]">
-                  <ChatMarkdown streaming={running}>
-                    {block.result || block.progress || ""}
-                  </ChatMarkdown>
-                </div>
-              ) : null}
+            <div key={commsKey || i} className="flex justify-start">
+              <AgentCommsPill block={block} onOpenBot={onOpenBot} />
             </div>
-          );
-        }
-        if (block.kind === "child_bot") {
-          const removed = block.status === "deleted" || block.status === "archived";
-          return (
-            <button
-              key={i}
-              type="button"
-              disabled={removed}
-              onClick={() => onOpenBot(block.botId)}
-              className="w-[min(340px,90%)] rounded-[18px] border border-[#232326] bg-[#17171A] px-[18px] py-4 text-left disabled:opacity-60"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[15px] font-medium text-[#ECECEE]">{block.name}</span>
-                <span
-                  className="rounded-full px-[11px] py-1 text-[13px]"
-                  style={{
-                    background: removed ? "rgba(230,87,7,.14)" : "rgba(48,162,75,.14)",
-                    color: removed ? "#E65707" : "#4ECB71",
-                  }}
-                >
-                  {block.status === "archived"
-                    ? "archived"
-                    : block.status === "deleted"
-                      ? "deleted"
-                      : "bot"}
-                </span>
-              </div>
-              <div className="mt-2 text-[14.5px] leading-[1.5] text-[#A8A8AD]">
-                {removed
-                  ? block.status === "archived"
-                    ? "Archived this bot. Its chat, memory, and files are preserved."
-                    : "Removed this bot, including its chat, computer, and memory."
-                  : block.title || "Opened its own thread. Tap to switch."}
-              </div>
-            </button>
           );
         }
         if (block.kind === "image") {
@@ -3025,33 +2978,6 @@ function DeleteRoutineDialog({
       </div>
     </div>
   );
-}
-
-function embeddableScreenUrl(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url, window.location.href);
-    const page = new URL(window.location.href);
-    const local = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
-    const pagePort = page.port || (page.protocol === "https:" ? "443" : "80");
-    if (local && parsed.port && parsed.port !== pagePort) {
-      return null;
-    }
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
-function screenIframeSandbox(url: string | null) {
-  if (!url) return undefined;
-  try {
-    return new URL(url, window.location.href).pathname.startsWith("/novnc/")
-      ? "allow-scripts allow-pointer-lock"
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function computerPlaceholder(
