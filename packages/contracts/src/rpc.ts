@@ -16,6 +16,10 @@ import {
   CreateRoutineInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  McpServerConfigSchema,
+  McpServersListSchema,
+  McpServersPublicListSchema,
+  McpServerStatusSchema,
   MemoryDocumentSchema,
   MeSchema,
   ModelCatalogEntrySchema,
@@ -308,6 +312,11 @@ export const appContract = {
   },
   export: {
     bot: oc.input(botId).output(ExportManifestSchema),
+  },
+  mcp: {
+    list: oc.output(McpServersPublicListSchema),
+    update: oc.input(McpServersListSchema).output(z.object({ ok: z.literal(true) })),
+    status: oc.output(z.object({ servers: z.array(McpServerStatusSchema) })),
   },
   notifications: {
     registerPush: oc

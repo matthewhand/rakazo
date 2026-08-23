@@ -27,6 +27,7 @@ import {
   nextCronDate,
   nextFence,
   promptInvokesSkill,
+  redactRecord,
   redactSecrets,
   sandboxCommandTimeoutMs,
   userTurnBlocksForRun,
@@ -542,6 +543,29 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return result;
         };
 
+        const recordToolStatus = async (
+          name: string,
+          executionId: string,
+          args: Record<string, unknown>,
+          status: "running" | "completed" | "failed",
+          result?: string,
+        ) => {
+          await deps.events.append({
+            workspaceId: run.workspaceId,
+            threadId: thread.id,
+            botId: bot.id,
+            type: "agent.tool.called",
+            runId,
+            payload: {
+              name,
+              executionId,
+              args: redactRecord(args, runSecrets),
+              status,
+              result,
+            },
+          });
+        };
+
         const applyTool = async (
           name: string,
           args: Record<string, unknown>,
@@ -862,12 +886,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
           if (deps.connector) {
             let result: unknown = { error: `unknown tool ${name}` };
+            let connectorFailed = false;
             for await (const event of deps.connector.execute(
               { tool: name, args, executionId },
               context,
             )) {
               if (event.type === "result") {
                 result = event.data;
+                connectorFailed = false;
                 const logIds = collectLogIds(event.data);
                 for (const logId of logIds) {
                   await deps.events.append({
@@ -880,11 +906,49 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   });
                 }
               }
-              if (event.type === "error") result = { error: event.message };
+              if (event.type === "error") {
+                result = { error: event.message };
+                connectorFailed = true;
+              }
             }
-            return finish(result);
+            const finished = await finish(result);
+            if (connectorFailed && finished && typeof finished === "object") {
+              connectorFailures.add(finished);
+            }
+            return finished;
           }
           return finish({ error: `unknown tool ${name}` });
+        };
+
+        const connectorFailures = new WeakSet<object>();
+
+        const applyRecordedTool = async (
+          name: string,
+          args: Record<string, unknown>,
+          executionId: string,
+        ) => {
+          try {
+            const result = await applyTool(name, args, executionId);
+            const failed = Boolean(result && typeof result === "object" && connectorFailures.has(result));
+            await recordToolStatus(
+              name,
+              executionId,
+              args,
+              failed ? "failed" : "completed",
+              summarizeToolOutcome(result, runSecrets),
+            );
+            return result;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await recordToolStatus(
+              name,
+              executionId,
+              args,
+              "failed",
+              redactSecrets(message, runSecrets),
+            );
+            throw error;
+          }
         };
 
         const pluginLine =
@@ -970,7 +1034,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               },
               resumeFromCheckpoint: resumeFromTakeover ? "takeover" : undefined,
               script,
-              executeTool: scripted ? undefined : applyTool,
+              executeTool: scripted ? undefined : applyRecordedTool,
             },
             context,
           )) {
@@ -1097,15 +1161,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
               });
               return;
             } else if (event.type === "tool") {
-              await deps.events.append({
-                workspaceId: run.workspaceId,
-                threadId: thread.id,
-                botId: bot.id,
-                type: "agent.tool.called",
-                runId,
-                payload: { name: event.name, executionId: event.executionId },
-              });
-              if (scripted) await applyTool(event.name, event.args, event.executionId);
+              await recordToolStatus(
+                event.name,
+                event.executionId,
+                event.args,
+                "running",
+              );
+              if (scripted) await applyRecordedTool(event.name, event.args, event.executionId);
             } else if (event.type === "subagent") {
               const safeTask = redactSecrets(event.task, runSecrets);
               const safeProgress = event.progress
@@ -1596,6 +1658,38 @@ async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Pr
   } finally {
     release();
     if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
+  }
+}
+
+function summarizeToolOutcome(result: unknown, secrets: string[]): string | undefined {
+  if (result == null) return undefined;
+  if (typeof result === "string") return redactSecrets(result, secrets).slice(0, 4_000);
+  if (typeof result === "object") {
+    const record = result as { content?: unknown; error?: unknown; ok?: unknown };
+    if (Array.isArray(record.content)) {
+      const text = record.content
+        .filter(
+          (part): part is { type: string; text?: string } =>
+            Boolean(part) && typeof part === "object" && (part as { type?: string }).type === "text",
+        )
+        .map((part) => part.text ?? "")
+        .join("\n")
+        .trim();
+      if (text) return redactSecrets(text, secrets).slice(0, 4_000);
+      if (
+        record.content.some(
+          (part) => part && typeof part === "object" && (part as { type?: string }).type === "image",
+        )
+      ) {
+        return "Captured a screenshot";
+      }
+    }
+    if (typeof record.error === "string") return redactSecrets(record.error, secrets).slice(0, 4_000);
+  }
+  try {
+    return redactSecrets(JSON.stringify(result), secrets).slice(0, 4_000);
+  } catch {
+    return "ok";
   }
 }
 

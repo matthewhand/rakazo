@@ -23,6 +23,8 @@ export interface AppEnv {
   boxApiKey: string | undefined;
   boxApiUrl: string | undefined;
   composioApiKey: string | undefined;
+  mcpConfigPath: string | undefined;
+  mcpServers: string | undefined;
   defaultProvider: string;
   defaultModel: string;
   wakeupDriver: string;
@@ -55,6 +57,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     boxApiKey: source.BOX_API_KEY,
     boxApiUrl: source.BOX_API_URL ?? source.BOX_BASE_URL,
     composioApiKey: source.COMPOSIO_API_KEY,
+    mcpConfigPath: source.MCP_CONFIG_PATH,
+    mcpServers: source.MCP_SERVERS,
     defaultProvider: source.PI_DEFAULT_PROVIDER ?? "openrouter",
     defaultModel: source.PI_DEFAULT_MODEL ?? "deepseek/deepseek-v4-flash-0731",
     wakeupDriver: source.WAKEUP_DRIVER ?? "graphile",
