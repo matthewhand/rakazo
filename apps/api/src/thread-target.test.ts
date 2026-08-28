@@ -90,7 +90,7 @@ describe("threadSnapshot", () => {
       completedAt: new Date("2026-08-23T00:00:01.000Z"),
       createdAt: new Date("2026-08-23T00:00:00.000Z"),
     };
-    const findManyEvents = vi.fn();
+    const findManyEvents = vi.fn().mockResolvedValue([]);
     const findFirstRun = vi.fn().mockResolvedValue(run);
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
@@ -131,11 +131,17 @@ describe("threadSnapshot", () => {
         error: "Provider is not configured: openrouter",
       }),
     );
-    expect(findManyEvents).not.toHaveBeenCalled();
+    expect(findManyEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: { in: ["thread.subagent", "agent.tool.called"] },
+        }),
+      }),
+    );
   });
 
   it("does not return a cancelled or completed run", async () => {
-    const findManyEvents = vi.fn();
+    const findManyEvents = vi.fn().mockResolvedValue([]);
     const findFirstRun = vi.fn().mockResolvedValue(null);
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
@@ -168,7 +174,66 @@ describe("threadSnapshot", () => {
       }),
     );
     expect(snapshot.run).toBeNull();
-    expect(findManyEvents).not.toHaveBeenCalled();
+    expect(findManyEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: { in: ["thread.subagent", "agent.tool.called"] },
+        }),
+      }),
+    );
+  });
+
+  it("reloads tool pills after the run has completed", async () => {
+    const findManyEvents = vi.fn().mockResolvedValue([
+      {
+        id: "event-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        seq: 4,
+        type: "agent.tool.called",
+        runId: "run-1",
+        payload: {
+          name: "write_file",
+          executionId: "exec-1",
+          status: "completed",
+          result: "Wrote notes/result.txt",
+        },
+        createdAt: new Date("2026-08-23T00:00:00.000Z"),
+      },
+    ]);
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: { findMany: vi.fn().mockResolvedValue([]) },
+      event: {
+        findFirst: vi.fn().mockResolvedValue({ seq: 6 }),
+        findMany: findManyEvents,
+      },
+      run: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const target = {
+      kind: "bot",
+      botId: "bot-1",
+      threadId: "thread-1",
+      bot: { computer: null },
+    } as ThreadTarget;
+
+    const snapshot = await threadSnapshot({ prisma }, target);
+
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({
+        id: "tool:exec-1",
+        blocks: [
+          expect.objectContaining({
+            kind: "tool",
+            name: "write_file",
+            status: "completed",
+          }),
+        ],
+      }),
+    ]);
   });
 });
 

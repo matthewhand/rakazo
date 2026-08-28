@@ -291,17 +291,11 @@ export async function threadSnapshot(
             orderBy: { createdAt: "desc" },
           }),
         ]);
-        const liveEvents =
-          run && isActive(run.status as RunStatus)
-            ? await tx.event.findMany({
-                where: {
-                  threadId: target.threadId,
-                  runId: run.id,
-                  type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
-                },
-                orderBy: { seq: "asc" },
-              })
-            : [];
+        const liveEvents = await loadCommsLiveEvents(
+          tx,
+          target.threadId,
+          run && isActive(run.status as RunStatus) ? [run.id] : [],
+        );
         return { messagePage, last, run, liveEvents };
       }),
     ]);
@@ -333,17 +327,11 @@ export async function threadSnapshot(
         orderBy: { createdAt: "desc" },
       }),
     ]);
-    const liveEvents =
-      activeRuns.length > 0
-        ? await tx.event.findMany({
-            where: {
-              threadId: target.threadId,
-              runId: { in: activeRuns.map((run) => run.id) },
-              type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
-            },
-            orderBy: { seq: "asc" },
-          })
-        : [];
+    const liveEvents = await loadCommsLiveEvents(
+      tx,
+      target.threadId,
+      activeRuns.map((run) => run.id),
+    );
     return { messagePage, last, activeRuns, liveEvents };
   });
   return {
@@ -357,6 +345,36 @@ export async function threadSnapshot(
     run: core.activeRuns[0] ? mapRun(core.activeRuns[0]) : null,
     activeRuns: core.activeRuns.map(mapRun),
   };
+}
+
+async function loadCommsLiveEvents(
+  tx: {
+    event: {
+      findMany: PrismaClient["event"]["findMany"];
+    };
+  },
+  threadId: string,
+  activeRunIds: string[],
+) {
+  if (activeRunIds.length > 0) {
+    return tx.event.findMany({
+      where: {
+        threadId,
+        runId: { in: activeRunIds },
+        type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
+      },
+      orderBy: { seq: "asc" },
+    });
+  }
+  const comms = await tx.event.findMany({
+    where: {
+      threadId,
+      type: { in: ["thread.subagent", "agent.tool.called"] },
+    },
+    orderBy: { seq: "desc" },
+    take: 40,
+  });
+  return comms.reverse();
 }
 
 function messagesWithLiveEvents(

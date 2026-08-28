@@ -77,6 +77,51 @@ describe("thread event reduction", () => {
     expect(mergeThreadSnapshot(live, stale, true)).toBe(live);
   });
 
+  it("keeps live tool pills when a later refresh only has the durable steps message", () => {
+    const previous: ThreadSnapshot = {
+      ...snapshot([
+        message("user-1", [{ kind: "text", text: "write a file" }], 1),
+        message(
+          "tool:exec-1",
+          [
+            {
+              kind: "tool",
+              executionId: "exec-1",
+              name: "write_file",
+              status: "completed",
+              result: "Wrote notes/result.txt",
+            },
+          ],
+          4,
+        ),
+      ]),
+      cursor: 5,
+    };
+    const recent: ThreadSnapshot = {
+      ...snapshot([
+        message("user-1", [{ kind: "text", text: "write a file" }], 1),
+        message(
+          "bot-1",
+          [
+            { kind: "text", text: "writing that into my home now." },
+            { kind: "steps", steps: [{ label: "Write file", count: 1 }] },
+          ],
+          6,
+        ),
+      ]),
+      cursor: 7,
+    };
+
+    const next = mergeThreadSnapshot(previous, recent);
+
+    expect(next.messages.map((item) => item.id)).toEqual(["user-1", "bot-1", "tool:exec-1"]);
+    expect(next.messages[2]?.blocks[0]).toMatchObject({
+      kind: "tool",
+      name: "write_file",
+      status: "completed",
+    });
+  });
+
   it("accumulates progress deltas and keeps only the active progress message", () => {
     const stale = message("progress:older", [{ kind: "progress", text: "old run" }]);
     const initial = snapshot([stale]);
