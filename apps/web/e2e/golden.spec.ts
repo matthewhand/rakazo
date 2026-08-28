@@ -257,7 +257,7 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
   await page.getByRole("main").getByRole("button", { name: "Scout bot" }).click();
   await expect(page.getByRole("dialog", { name: "Scout" })).toBeVisible();
   await captureScreenshot(page, testInfo, "13a-child-bot-comms-popup");
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
     timeout: 30_000,
   });
@@ -274,7 +274,7 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
     .click();
   await expect(page.getByRole("dialog", { name: /write_file/ })).toBeVisible();
   await captureScreenshot(page, testInfo, "13c-tool-comms-popup");
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
     timeout: 30_000,
   });
@@ -291,7 +291,7 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
     .click();
   await expect(page.getByRole("dialog", { name: /helper/i })).toBeVisible();
   await captureScreenshot(page, testInfo, "13e-helper-comms-popup");
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({
     timeout: 30_000,
   });

@@ -6,7 +6,7 @@ test("owner or member can open the MCP servers tab", async ({ page }, testInfo) 
   await signup(page, `mcp-gallery-${stamp}@rakazo.test`, "password12", "Mcp Gallery");
   await completeOnboarding(page, testInfo);
 
-  await page.getByText("Plugins").click();
+  await page.getByText("Integrations").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
   await page.getByRole("tab", { name: "MCP servers" }).click();
   await expect(
