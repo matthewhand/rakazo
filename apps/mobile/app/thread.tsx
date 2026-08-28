@@ -1580,85 +1580,8 @@ function MessageBubble({
   const special = message.blocks.find(
     (block) => block.kind === "subagent" || block.kind === "child_bot" || block.kind === "tool",
   );
-  if (special?.kind === "tool") {
+  if (special) {
     return <CommsPill block={special} onOpenBot={onOpenBot} />;
-  }
-  if (special?.kind === "subagent") {
-    const running = special.status === "running";
-    const failed = special.status === "failed";
-    return (
-      <View
-        style={{
-          width: "90%",
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: "#232326",
-          backgroundColor: "#17171A",
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-        }}
-      >
-        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-          <Text style={{ color: "#ECECEE", fontSize: 15, fontWeight: "600" }}>
-            {special.name || "subagent"}
-          </Text>
-          <Text
-            style={{ color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71", fontSize: 13 }}
-          >
-            {running ? "subagent" : special.status}
-          </Text>
-        </View>
-        {special.task ? (
-          <Text style={{ color: "#85858A", marginTop: 8, fontSize: 13.5 }}>{special.task}</Text>
-        ) : null}
-        {special.result || special.progress ? (
-          <View style={{ marginTop: 8 }}>
-            <ChatMarkdown streaming={running}>
-              {special.result || special.progress || ""}
-            </ChatMarkdown>
-          </View>
-        ) : null}
-      </View>
-    );
-  }
-  if (special?.kind === "child_bot") {
-    const removed = special.status === "deleted" || special.status === "archived";
-    return (
-      <Pressable
-        disabled={removed}
-        onPress={() => onOpenBot(special.botId ?? "", special.name ?? "Bot")}
-        style={{
-          width: "90%",
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: "#232326",
-          backgroundColor: "#17171A",
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-          opacity: removed ? 0.6 : 1,
-        }}
-      >
-        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-          <Text style={{ color: "#ECECEE", fontSize: 15, fontWeight: "600" }}>
-            {special.name || "Bot"}
-          </Text>
-          <Text style={{ color: removed ? "#E65707" : "#4ECB71", fontSize: 13 }}>
-            {special.status === "archived"
-              ? "archived"
-              : special.status === "deleted"
-                ? "deleted"
-                : "bot"}
-          </Text>
-        </View>
-        <Text style={{ color: "#A8A8AD", marginTop: 8, fontSize: 14.5, lineHeight: 21 }}>
-          {removed
-            ? special.status === "archived"
-              ? "Archived. Chat, memory, and files kept."
-              : "Removed with chat, computer, and memory."
-            : special.title || "Opened its thread."}
-        </Text>
-      </Pressable>
-    );
   }
   if (appConnectBlocks.length > 0 && appConnectBlocks.length === message.blocks.length) {
     return (

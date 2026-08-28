@@ -4,7 +4,7 @@ import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 test("owner or member can open the MCP servers tab", async ({ page }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `mcp-gallery-${stamp}@rakazo.test`, "password12", "Mcp Gallery");
-  await completeOnboarding(page, ["A bit of everything", "Clear and tight"]);
+  await completeOnboarding(page, testInfo);
 
   await page.getByText("Plugins").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
