@@ -10,22 +10,32 @@ import {
   createPostgresReconciliationLeadership,
   createRunExecutor,
   createRunSandbox,
+  createRunSecretWriter,
   EncryptedSecretStore,
   ExpoPushProvider,
   GraphileJobPublisher,
   GraphileJobWorkerHost,
   InMemoryJobQueue,
+  InstalledConnectorProvider,
   isComposioEnabled,
+  isPipedreamEnabled,
   LocalAgentHomeStore,
   LocalArtifactStore,
   McpClient,
+  McpConnector,
+  McpOAuthBroker,
+  PiAgentRuntime,
+  PipedreamConnector,
+  PostgresRealtimeFanout,
   parseMcpConfig,
   parseMcpConfigFromEnv,
-  PiAgentRuntime,
-  PostgresRealtimeFanout,
+  pipedreamConfigFromEnv,
+  resolveDeploymentModel,
+  resolveSandboxProvider,
   ScriptedAgentRuntime,
+  WorkspaceMemoryProviderResolver,
 } from "@rakazo/adapters";
-import { resolveEncryptionKey } from "@rakazo/core";
+import { resolveEncryptionKey, resolveSupervisorToken } from "@rakazo/core";
 import { createDb, createThreadEvents } from "@rakazo/db";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 
@@ -37,12 +47,19 @@ async function main() {
     connectionString: process.env.REALTIME_DATABASE_URL ?? databaseUrl,
     publisher: pool,
   });
-  const events = createThreadEvents(prisma, realtime);
+  const secrets = new EncryptedSecretStore(resolveEncryptionKey(process.env));
+  const events = createThreadEvents(prisma, realtime, {
+    runSecretWriter: createRunSecretWriter(secrets),
+  });
   const runtime =
     process.env.AGENT_RUNTIME === "scripted" ? new ScriptedAgentRuntime() : new PiAgentRuntime();
   const dataDir = process.env.DATA_DIR ?? "./data";
-  const sandbox = createRunSandbox(process.env.SANDBOX_PROVIDER ?? "docker", {
+  // Same resolver the API uses, so both processes agree on provider, model and key.
+  const { key: deploymentModelKey } = resolveDeploymentModel();
+  const sandboxProvider = resolveSandboxProvider(process.env);
+  const sandbox = createRunSandbox(sandboxProvider, {
     supervisorUrl: process.env.SANDBOX_SUPERVISOR_URL ?? "http://127.0.0.1:7091",
+    supervisorToken: sandboxProvider === "docker" ? resolveSupervisorToken(process.env) : undefined,
     e2bApiKey: process.env.E2B_API_KEY,
     daytonaApiKey: process.env.DAYTONA_API_KEY,
     daytonaApiUrl: process.env.DAYTONA_API_URL,
@@ -57,20 +74,48 @@ async function main() {
     MCP_SERVERS: process.env.MCP_SERVERS,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {
     mcpConfig = parseMcpConfigFromEnv(envMcp);
   }
   const mcpClient = new McpClient(mcpConfig, loadMcpConfig);
-  const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY), mcpClient);
+  const mcpOAuth = new McpOAuthBroker(prisma, secrets);
+  const mcp = new McpConnector(
+    prisma,
+    secrets,
+    {
+      stdioEnabled: process.env.MCP_STDIO_ENABLED === "true",
+      allowedCommands: (process.env.MCP_STDIO_ALLOWED_COMMANDS ?? "")
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean),
+    },
+    mcpOAuth,
+  );
+  const pipedreamConfig = pipedreamConfigFromEnv({
+    pipedreamClientId: process.env.PIPEDREAM_CLIENT_ID,
+    pipedreamClientSecret: process.env.PIPEDREAM_CLIENT_SECRET,
+    pipedreamProjectId: process.env.PIPEDREAM_PROJECT_ID,
+    pipedreamEnvironment: process.env.PIPEDREAM_ENVIRONMENT,
+    encryptionKey: resolveEncryptionKey(process.env),
+  });
+  const pipedream = isPipedreamEnabled(pipedreamConfig)
+    ? new PipedreamConnector(pipedreamConfig)
+    : undefined;
+  const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY), undefined, [
+    new InstalledConnectorProvider(prisma, secrets),
+    ...(pipedream ? [pipedream] : []),
+    mcp,
+    mcpClient,
+  ]);
   const connector = stack.destination;
   await connector.start();
   void mcpClient.initialize().catch((error) => {
     console.error("[MCP] Initialization failed:", error);
   });
-  const secrets = new EncryptedSecretStore(resolveEncryptionKey(process.env));
+  const memoryProviders = new WorkspaceMemoryProviderResolver(prisma, secrets);
   const home = new LocalAgentHomeStore(dataDir);
   const artifacts = new LocalArtifactStore(dataDir);
   const inMemoryJobs = process.env.WAKEUP_DRIVER === "memory" ? new InMemoryJobQueue() : undefined;
@@ -81,15 +126,15 @@ async function main() {
     runtime,
     sandbox,
     memory: new MarkdownMemoryStore(prisma),
+    memoryProviders,
     home,
     artifacts,
     connector: stack.connector,
+    connectors: stack.connector,
     listConnectedPluginSlugs: stack.composio?.listConnectedSlugs.bind(stack.composio),
-    secrets: [process.env.OPENROUTER_API_KEY ?? "", process.env.COMPOSIO_API_KEY ?? ""].filter(
-      Boolean,
-    ),
+    secrets: [deploymentModelKey ?? "", process.env.COMPOSIO_API_KEY ?? ""].filter(Boolean),
     secretStore: secrets,
-    deploymentModelKey: process.env.OPENROUTER_API_KEY,
+    deploymentModelKey,
     dataDir,
     notifications: new ExpoPushProvider(dataDir),
     jobs,
@@ -105,7 +150,9 @@ async function main() {
     events,
     workerId: process.pid.toString(),
     runtime,
-    deploymentModelKey: process.env.OPENROUTER_API_KEY,
+    secretStore: secrets,
+    memoryProviders,
+    deploymentModelKey,
   });
   await jobHost.start(jobHandlers);
   const reconciler = createJobReconciler({
@@ -125,6 +172,7 @@ async function main() {
     await realtime.close();
     await connector.stop();
     await mcpClient.close().catch(() => undefined);
+    await mcp.close();
     await prisma.$disconnect().catch(() => undefined);
     await pool.end().catch(() => undefined);
   };

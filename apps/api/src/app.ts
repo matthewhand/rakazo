@@ -1,13 +1,21 @@
 import { rm } from "node:fs/promises";
+import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import type { JobPublisher, RealtimeFanout, SandboxProvider } from "@rakazo/adapter-kit";
+import type {
+  JobPublisher,
+  ManagedConnectorProvider,
+  RealtimeFanout,
+  SandboxProvider,
+} from "@rakazo/adapter-kit";
 import {
   type ComposioProvider,
+  type ConnectorRegistry,
   createBackgroundJobHandlers,
   createConnectorStack,
   createJobReconciler,
   createRunExecutor,
   createRunSandbox,
+  createRunSecretWriter,
   type DestinationEmulator,
   destroyBot,
   EncryptedSecretStore,
@@ -15,20 +23,29 @@ import {
   GraphileJobPublisher,
   InMemoryJobQueue,
   InMemoryRealtimeFanout,
+  InstalledConnectorProvider,
   isComposioEnabled,
   isMcpEnabled,
+  isPipedreamEnabled,
   LocalAgentHomeStore,
   LocalArtifactStore,
   McpClient,
-  parseMcpConfig,
-  parseMcpConfigFromEnv,
+  McpConnector,
+  McpOAuthBroker,
   PiAgentRuntime,
   PiOAuthLogins,
+  PipedreamConnector,
   PostgresRealtimeFanout,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
+  pipedreamConfigFromEnv,
   pushTokenPath,
+  type RemoteConnectorDependencies,
   ScriptedAgentRuntime,
+  WorkspaceMemoryProviderResolver,
 } from "@rakazo/adapters";
 import { blockedAuthPaths, createAuth } from "@rakazo/auth";
+import { signupPolicyFromEnv } from "@rakazo/core";
 import { createDb, createThreadEvents, type PrismaClient, requireMembership } from "@rakazo/db";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
@@ -36,6 +53,7 @@ import { cors } from "hono/cors";
 import { type AppEnv, loadEnv } from "./env.js";
 import { createRouter } from "./router.js";
 import { mountVoiceHttpRoutes } from "./voice.js";
+import { mountWebhookHttpRoutes } from "./webhook.js";
 
 export interface AppHandles {
   app: Hono;
@@ -44,6 +62,7 @@ export interface AppHandles {
   sandbox: SandboxProvider;
   connector: DestinationEmulator;
   composio?: ComposioProvider;
+  connectors: ConnectorRegistry;
   executor: ReturnType<typeof createRunExecutor>;
   stop: () => Promise<void>;
 }
@@ -53,12 +72,16 @@ export async function createApp(
     prisma?: PrismaClient;
     realtime?: RealtimeFanout;
     composio?: ComposioProvider;
+    pipedream?: ManagedConnectorProvider;
+    remoteConnectors?: RemoteConnectorDependencies;
   } = {},
 ): Promise<AppHandles> {
   const {
     prisma: prismaOverride,
     realtime: realtimeOverride,
     composio: composioOverride,
+    pipedream: pipedreamOverride,
+    remoteConnectors,
     ...envOverrides
   } = overrides;
   const env = { ...loadEnv(process.env), ...envOverrides };
@@ -75,12 +98,34 @@ export async function createApp(
           publisher: created.pool,
         })
       : new InMemoryRealtimeFanout());
-  const events = createThreadEvents(prisma, realtime);
-  await prisma.deploymentSettings.upsert({
+  const secrets = new EncryptedSecretStore(env.encryptionKey);
+  const events = createThreadEvents(prisma, realtime, {
+    runSecretWriter: createRunSecretWriter(secrets),
+  });
+  const environmentSignupPolicy = signupPolicyFromEnv(env);
+  const deploymentSettings = await prisma.deploymentSettings.upsert({
     where: { id: "default" },
-    create: { id: "default" },
+    create: {
+      id: "default",
+      signupsEnabled: environmentSignupPolicy.enabled,
+      signupAllowlist: environmentSignupPolicy.allowlist.join(","),
+      signupPolicyInitialized: true,
+    },
     update: {},
   });
+  if (!deploymentSettings.signupPolicyInitialized) {
+    // Older versions created this row with schema defaults even though auth
+    // still enforced the environment policy. Copy that effective policy once
+    // so upgrades preserve behavior before Settings becomes authoritative.
+    await prisma.deploymentSettings.updateMany({
+      where: { id: "default", signupPolicyInitialized: false },
+      data: {
+        signupsEnabled: environmentSignupPolicy.enabled,
+        signupAllowlist: environmentSignupPolicy.allowlist.join(","),
+        signupPolicyInitialized: true,
+      },
+    });
+  }
 
   const jobKind = env.wakeupDriver;
   const inMemoryJobs = jobKind === "memory" ? new InMemoryJobQueue() : undefined;
@@ -97,7 +142,8 @@ export async function createApp(
     dataDir: env.dataDir,
     prisma,
   });
-  const secrets = new EncryptedSecretStore(env.encryptionKey);
+  const mcpOAuth = new McpOAuthBroker(prisma, secrets, remoteConnectors);
+  const memoryProviders = new WorkspaceMemoryProviderResolver(prisma, secrets);
   const oauthLogins = new PiOAuthLogins();
   const home = new LocalAgentHomeStore(env.dataDir);
   const artifacts = new LocalArtifactStore(env.dataDir);
@@ -107,7 +153,7 @@ export async function createApp(
     MCP_SERVERS: env.mcpServers,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {
@@ -120,14 +166,31 @@ export async function createApp(
     await mcpClient.reload(next);
     mcpEnabled = isMcpEnabled(next);
   };
-  const stack = createConnectorStack(
-    isComposioEnabled(env.composioApiKey),
-    mcpClient,
-    composioOverride,
+  const mcp = new McpConnector(
+    prisma,
+    secrets,
+    {
+      stdioEnabled: env.mcpStdioEnabled,
+      allowedCommands: env.mcpStdioAllowedCommands,
+      network: remoteConnectors,
+    },
+    mcpOAuth,
   );
+  const pipedreamConfig = pipedreamConfigFromEnv(env);
+  const pipedream =
+    pipedreamOverride ??
+    (isPipedreamEnabled(pipedreamConfig) ? new PipedreamConnector(pipedreamConfig) : undefined);
+  const installed = new InstalledConnectorProvider(prisma, secrets, remoteConnectors);
+  const stack = createConnectorStack(isComposioEnabled(env.composioApiKey), composioOverride, [
+    installed,
+    ...(pipedream ? [pipedream] : []),
+    mcp,
+    mcpClient,
+  ]);
   const connector = stack.destination;
   await connector.start();
   void stack.composio?.warmDirectory().catch(() => undefined);
+  void pipedream?.warmDirectory?.().catch(() => undefined);
   void mcpClient.initialize().catch((error) => {
     console.error("[MCP] Initialization failed:", error);
   });
@@ -179,13 +242,15 @@ export async function createApp(
     runtime,
     sandbox,
     memory,
+    memoryProviders,
     home,
     artifacts,
     connector: stack.connector,
+    connectors: stack.connector,
     listConnectedPluginSlugs: stack.composio?.listConnectedSlugs.bind(stack.composio),
-    secrets: [env.openRouterKey ?? "", env.composioApiKey ?? ""].filter(Boolean),
+    secrets: [env.deploymentModelKey ?? "", env.composioApiKey ?? ""].filter(Boolean),
     secretStore: secrets,
-    deploymentModelKey: env.openRouterKey,
+    deploymentModelKey: env.deploymentModelKey,
     dataDir: env.dataDir,
     notifications,
     jobs,
@@ -201,7 +266,9 @@ export async function createApp(
     events,
     workerId: "api",
     runtime,
-    deploymentModelKey: env.openRouterKey,
+    secretStore: secrets,
+    memoryProviders,
+    deploymentModelKey: env.deploymentModelKey,
   });
   if (inMemoryJobs) {
     await inMemoryJobs.start(jobHandlers);
@@ -216,24 +283,34 @@ export async function createApp(
     jobs,
     sandbox,
     memory,
+    memoryProviders,
     home,
     secrets,
     oauthLogins,
+    mcpOAuth,
     composio: stack.composio,
     mcpClient,
     reloadMcp,
+    connectors: stack.connector,
+    remoteConnectors,
     artifacts,
     dataDir: env.dataDir,
     env: {
       defaultProvider: env.defaultProvider,
       defaultModel: env.defaultModel,
-      openRouterKey: env.openRouterKey,
+      deploymentModelKey: env.deploymentModelKey,
       webOrigin: env.webOrigin,
-      screenProxySecret: env.authSecret,
+      screenProxySecret: env.screenProxySecret,
       sandboxProvider: env.sandboxProvider,
+      gitSha: env.gitSha,
+      updaterUrl: env.updaterUrl,
+      updaterToken: env.updaterToken,
+      imageTag: env.imageTag,
     },
   });
-  const rpc = new RPCHandler(router);
+  const rpc = new RPCHandler(router, {
+    clientInterceptors: [onError((error, { path }) => logUnexpectedRpcError(error, path))],
+  });
   const app = new Hono();
   app.use(
     "*",
@@ -269,12 +346,15 @@ export async function createApp(
     if (!session?.user) return null;
     return requireMembership(prisma, session.user.id).catch(() => null);
   });
+  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+
   app.get("/health", (c) =>
     c.json({
       ok: true,
       runtime: env.agentRuntime,
       sandbox: env.sandboxProvider,
       composio: Boolean(stack.composio),
+      pipedream: Boolean(pipedream),
       mcp: mcpEnabled,
       jobs: jobKind,
       realtime: realtime.describe().id,
@@ -289,6 +369,7 @@ export async function createApp(
     sandbox,
     connector,
     composio: stack.composio,
+    connectors: stack.connector,
     executor,
     stop: async () => {
       oauthLogins.abortAll();
@@ -296,7 +377,8 @@ export async function createApp(
       await jobs.close();
       await realtime.close();
       await connector.stop();
-      await mcpClient?.close().catch(() => undefined);
+      await mcpClient.close().catch(() => undefined);
+      await mcp.close();
       await prisma.$disconnect().catch(() => undefined);
       await created.pool?.end().catch(() => undefined);
     },
@@ -322,4 +404,27 @@ function sessionHeaders(request: Request) {
     headers.set("cookie", `better-auth.session_token=${authz.slice(7).trim()}`);
   }
   return headers;
+}
+
+/**
+ * An ORPCError is a decision the router made (BAD_REQUEST, UNAUTHORIZED, ...) and reaches the
+ * caller intact. Everything else is flattened into an opaque "Internal server error", so
+ * unless it is logged here the only record of what actually broke is gone.
+ *
+ * The cause chain matters as much as the message: undici and most SDKs report a bare
+ * "fetch failed" and keep the host and errno one level down.
+ */
+export function logUnexpectedRpcError(error: unknown, path: readonly string[]): void {
+  if (error instanceof ORPCError) return;
+  const where = `rpc ${path.join("/")} failed`;
+  if (!(error instanceof Error)) {
+    console.error(where, String(error));
+    return;
+  }
+  const chain: string[] = [];
+  for (let current: unknown = error; current instanceof Error && chain.length < 4; ) {
+    chain.push(`${current.name}: ${current.message}`);
+    current = current.cause;
+  }
+  console.error(where, chain.join(" <- "), error.stack ?? "");
 }

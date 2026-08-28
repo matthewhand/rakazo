@@ -1,4 +1,4 @@
-import type { ComputerMode } from "@rakazo/contracts";
+import type { ComputerMode, ComputerReleaseReason } from "@rakazo/contracts";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
@@ -8,6 +8,7 @@ import {
   SafeAreaView,
 } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
+import { ComputerMaintenanceActions } from "../components/computer-maintenance-actions";
 import { ComputerModePicker } from "../components/computer-mode-picker";
 import { NativeSymbol } from "../components/native-symbol";
 import { currentApiBase, rpc } from "../lib/api";
@@ -136,9 +137,9 @@ export default function Computer() {
     }
   }
 
-  async function releaseComputer() {
+  async function releaseComputer(reason?: ComputerReleaseReason) {
     if (!botId) return;
-    await rpc("computer/release", { botId }).catch(() => undefined);
+    await rpc("computer/release", { botId, reason }).catch(() => undefined);
     setComputerOpen(false);
     await refresh().catch(() => undefined);
   }
@@ -148,7 +149,12 @@ export default function Computer() {
     setSwitching(true);
     setError(null);
     try {
-      if (hasControl) await rpc("computer/release", { botId });
+      if (hasControl) {
+        await rpc("computer/release", {
+          botId,
+          reason: computer?.takeoverRequested ? "skipped" : undefined,
+        });
+      }
       await rpc("bots/setComputer", { botId, mode });
       setComputer(null);
       setScreenUrl(null);
@@ -210,17 +216,10 @@ export default function Computer() {
       >
         <Text style={{ color: "#85858A", flex: 1 }}>{controlLabel(computer, name, botId)}</Text>
         {hasControl ? (
-          <Pressable
-            onPress={() => void releaseComputer()}
-            style={{
-              backgroundColor: "#1A1A1D",
-              paddingHorizontal: 14,
-              paddingVertical: 10,
-              borderRadius: 12,
-            }}
-          >
-            <Text style={{ color: "#ECECEE" }}>Release</Text>
-          </Pressable>
+          <ComputerReleaseActions
+            takeoverRequested={computer?.takeoverRequested ?? false}
+            onRelease={releaseComputer}
+          />
         ) : (
           <Pressable
             onPress={() => void openComputer()}
@@ -235,6 +234,17 @@ export default function Computer() {
           </Pressable>
         )}
       </View>
+      {computer?.state === "error" ||
+      computer?.state === "stopped" ||
+      (computer?.state === "running" && !embeddedScreenUrl) ? (
+        <ComputerMaintenanceActions
+          botId={botId ?? ""}
+          computer={computer}
+          onChanged={async () => {
+            await refresh();
+          }}
+        />
+      ) : null}
       <ComputerModePicker
         value={computer?.mode}
         disabled={switching}
@@ -341,21 +351,10 @@ export default function Computer() {
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                   {hasControl ? (
-                    <Pressable
-                      onPress={() => void releaseComputer()}
-                      hitSlop={8}
-                      style={{
-                        borderWidth: 1,
-                        borderColor: "#26262A",
-                        paddingHorizontal: 12,
-                        paddingVertical: 8,
-                        borderRadius: 10,
-                        minHeight: 44,
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Text style={{ color: "#ECECEE" }}>Release</Text>
-                    </Pressable>
+                    <ComputerReleaseActions
+                      takeoverRequested={computer?.takeoverRequested ?? false}
+                      onRelease={releaseComputer}
+                    />
                   ) : (
                     <Pressable
                       onPress={() =>
@@ -419,6 +418,46 @@ export default function Computer() {
           )}
         </SafeAreaProvider>
       </Modal>
+    </View>
+  );
+}
+
+function ComputerReleaseActions({
+  takeoverRequested,
+  onRelease,
+}: {
+  takeoverRequested: boolean;
+  onRelease: (reason?: ComputerReleaseReason) => Promise<void>;
+}) {
+  const actions: Array<{ label: string; reason?: ComputerReleaseReason; primary?: boolean }> =
+    takeoverRequested
+      ? [
+          { label: "Skip", reason: "skipped" },
+          { label: "I’m done", reason: "done", primary: true },
+        ]
+      : [{ label: "Release" }];
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {actions.map((action) => (
+        <Pressable
+          key={action.label}
+          accessibilityLabel={action.label}
+          onPress={() => void onRelease(action.reason)}
+          hitSlop={8}
+          style={{
+            minHeight: 44,
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: action.primary ? "#F1F1EF" : "#26262A",
+            backgroundColor: action.primary ? "#F1F1EF" : "#1A1A1D",
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 10,
+          }}
+        >
+          <Text style={{ color: action.primary ? "#17171A" : "#ECECEE" }}>{action.label}</Text>
+        </Pressable>
+      ))}
     </View>
   );
 }

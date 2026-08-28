@@ -1,308 +1,652 @@
-import type { ConnectionCatalogItem } from "@rakazo/contracts";
+import { Trans, useLingui } from "@lingui/react/macro";
+import type { CapabilityInstall, ConnectionCatalogItem } from "@rakazo/contracts";
+import {
+  abortableDelay,
+  buildFeaturedConnectorTiles,
+  EMPTY_PLUGIN_CATALOG_MESSAGE,
+  matchFeaturedConnectorId,
+} from "@rakazo/core";
 import { Button } from "@rakazo/ui-web";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { McpServersTab } from "../components/McpServersTab";
 import { rpc } from "../lib/rpc";
 
-let cachedCatalog: ConnectionCatalogItem[] = [];
-type CatalogView = "all" | "connected";
+type SourceKind = "treg" | "mcp" | "api";
 
-function markConnected(items: ConnectionCatalogItem[], slug: string, connected: boolean) {
-  return items.map((entry) => (entry.slug === slug ? { ...entry, connected } : entry));
+function itemKey(item: Pick<ConnectionCatalogItem, "connectorId" | "slug">) {
+  return `${item.connectorId}:${item.slug}`;
 }
 
-type Tab = "composio" | "mcp";
+function markConnected(
+  items: ConnectionCatalogItem[],
+  connectorId: string,
+  slug: string,
+  connected: boolean,
+) {
+  return items.map((entry) =>
+    entry.connectorId === connectorId && entry.slug === slug ? { ...entry, connected } : entry,
+  );
+}
 
 export function PluginsOverlay({
   onClose,
-  canManage = false,
+  onOpenMcp,
+  activeBotId,
 }: {
   onClose: () => void;
-  canManage?: boolean;
+  onOpenMcp?: () => void;
+  activeBotId?: string;
 }) {
-  const [tab, setTab] = useState<Tab>("composio");
+  const { t } = useLingui();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<CatalogView>("all");
-  const [catalog, setCatalog] = useState<ConnectionCatalogItem[]>(cachedCatalog);
+  const [catalog, setCatalog] = useState<ConnectionCatalogItem[]>([]);
+  const [sources, setSources] = useState<CapabilityInstall[]>([]);
+  const [sourceKind, setSourceKind] = useState<SourceKind | null>(null);
+  const [sourceName, setSourceName] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [credential, setCredential] = useState("");
+  const [authType, setAuthType] = useState<"none" | "bearer" | "header">("bearer");
+  const [authName, setAuthName] = useState("x-api-key");
   const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(cachedCatalog.length === 0);
-  const [mcpEditorOpen, setMcpEditorOpen] = useState(false);
-  const connectAbort = useRef<AbortController | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"integrations" | "mcp">("integrations");
+  const [canManage, setCanManage] = useState(false);
+  const connectionAttempt = useRef<AbortController | null>(null);
 
   async function refresh() {
-    const items = await rpc.connections.catalog({});
-    cachedCatalog = items;
+    const [items, installs] = await Promise.all([
+      rpc.connections.catalog({}),
+      rpc.capabilities.list(),
+    ]);
     setCatalog(items);
+    setSources(installs.filter((install) => install.kind === "mcp" || install.kind === "api"));
     return items;
   }
 
   useEffect(() => {
     void refresh()
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "Could not load catalog"),
+        setCatalogError(err instanceof Error ? err.message : t`Could not load integrations`),
       )
       .finally(() => setLoading(false));
-    return () => {
-      connectAbort.current?.abort();
-    };
+    void rpc
+      .me()
+      .then((me) => setCanManage(me.isDeploymentOwner))
+      .catch(() => undefined);
+    return () => connectionAttempt.current?.abort();
   }, []);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (mcpEditorOpen) return;
-      onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, mcpEditorOpen]);
+  const featuredTiles = useMemo(() => buildFeaturedConnectorTiles(catalog), [catalog]);
+  const showFeatured = !query.trim();
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const scoped = view === "connected" ? catalog.filter((item) => item.connected) : catalog;
+    const scoped = showFeatured
+      ? catalog.filter(
+          (item) =>
+            matchFeaturedConnectorId(item.slug) === null &&
+            matchFeaturedConnectorId(item.name) === null,
+        )
+      : catalog;
     if (!needle) return scoped;
     return scoped.filter(
       (item) =>
-        item.name.toLowerCase().includes(needle) || item.slug.toLowerCase().includes(needle),
+        item.name.toLowerCase().includes(needle) ||
+        item.slug.toLowerCase().includes(needle) ||
+        item.connectorId.toLowerCase().includes(needle),
     );
-  }, [catalog, query, view]);
+  }, [catalog, query, showFeatured]);
 
-  function setItemConnected(slug: string, connected: boolean) {
-    cachedCatalog = markConnected(cachedCatalog, slug, connected);
-    setCatalog((prev) => markConnected(prev, slug, connected));
+  async function notifyAppConnected(item: ConnectionCatalogItem) {
+    if (!activeBotId) return;
+    await rpc.onboarding
+      .appConnected({ botId: activeBotId, provider: item.slug })
+      .catch(() => undefined);
+  }
+
+  function setItemConnected(item: ConnectionCatalogItem, connected: boolean) {
+    setCatalog((prev) => markConnected(prev, item.connectorId, item.slug, connected));
   }
 
   async function connect(item: ConnectionCatalogItem) {
-    setError(null);
-    setPending(item.slug);
-    connectAbort.current?.abort();
-    const abort = new AbortController();
-    connectAbort.current = abort;
-    const popup = item.noAuth ? null : window.open("about:blank", "rakazo-composio-oauth");
+    connectionAttempt.current?.abort();
+    const controller = new AbortController();
+    connectionAttempt.current = controller;
+    setCatalogError(null);
+    const key = itemKey(item);
+    setPending(key);
     try {
-      const started = await rpc.connections.begin({ provider: item.slug, displayName: item.name });
-      if (abort.signal.aborted) {
-        popup?.close();
-        return;
-      }
-      if (started.authorizationUrl) {
-        if (popup) popup.location.replace(started.authorizationUrl);
-        else window.open(started.authorizationUrl, "_blank", "noopener,noreferrer");
-      } else {
-        popup?.close();
-      }
+      const started = await rpc.connections.begin({
+        connectorId: item.connectorId,
+        provider: item.slug,
+        displayName: item.name,
+      });
+      if (started.authorizationUrl)
+        window.open(started.authorizationUrl, "_blank", "noopener,noreferrer");
       if (item.noAuth && !started.authorizationUrl) {
-        setItemConnected(item.slug, true);
+        if (controller.signal.aborted) return;
+        setItemConnected(item, true);
+        void notifyAppConnected(item);
         return;
       }
       for (let i = 0; i < 45; i += 1) {
-        if (abort.signal.aborted) return;
+        if (controller.signal.aborted) return;
         const row = await rpc.connections
           .complete({ connectionId: started.connectionId })
           .catch(() => undefined);
         if (row?.status === "connected") {
-          setItemConnected(item.slug, true);
+          if (controller.signal.aborted) return;
+          setItemConnected(item, true);
+          void notifyAppConnected(item);
           return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await abortableDelay(2_000, controller.signal);
       }
-      if (!abort.signal.aborted) setError(`Timed out connecting ${item.name}.`);
+      if (controller.signal.aborted) return;
+      setCatalogError(
+        t`Connection to ${item.name} is still pending. You can close this and check again.`,
+      );
     } catch (err) {
-      if (!abort.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Could not connect");
-      }
+      if (controller.signal.aborted) return;
+      setCatalogError(err instanceof Error ? err.message : t`Could not connect`);
     } finally {
-      if (connectAbort.current === abort) setPending(null);
+      if (connectionAttempt.current === controller) {
+        connectionAttempt.current = null;
+        setPending(null);
+      }
     }
   }
 
   async function revoke(item: ConnectionCatalogItem) {
-    setError(null);
-    setPending(item.slug);
+    setCatalogError(null);
+    const key = itemKey(item);
+    setPending(key);
     try {
       const rows = await rpc.connections.list();
+      const matches = rows.filter(
+        (entry) => entry.connectorId === item.connectorId && entry.provider === item.slug,
+      );
       const row =
-        rows.find((entry) => entry.provider === item.slug && entry.status === "connected") ??
-        rows.find((entry) => entry.provider === item.slug && entry.status === "pending") ??
-        rows.find((entry) => entry.provider === item.slug && entry.status === "error");
-      if (!row) {
-        setError(`No connection record found for ${item.name}.`);
-        return;
-      }
+        matches.find((entry) => entry.status === "connected") ??
+        matches.find((entry) => entry.status === "pending") ??
+        matches.find((entry) => entry.status === "error");
+      if (!row) throw new Error(t`No connection record found for ${item.name}.`);
       await rpc.connections.revoke({ connectionId: row.id });
-      setItemConnected(item.slug, false);
+      setItemConnected(item, false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not revoke connection");
+      setCatalogError(err instanceof Error ? err.message : t`Could not revoke connection`);
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function beginSource(kind: SourceKind) {
+    setSourceKind(kind);
+    setSourceError(null);
+    setSourceName(kind === "treg" ? "Treg" : "");
+    setSourceUrl(kind === "treg" ? "https://treg.to/mcp/" : "");
+    setCredential("");
+    setAuthType(kind === "treg" ? "bearer" : "none");
+    setAuthName("x-api-key");
+  }
+
+  async function installSource() {
+    if (!sourceKind) return;
+    setSourceError(null);
+    setPending("install-source");
+    try {
+      const auth = {
+        type: authType,
+        ...(authType === "header" ? { name: authName.trim() } : {}),
+      };
+      await rpc.capabilities.install({
+        kind: sourceKind === "api" ? "api" : "mcp",
+        name: sourceName.trim() || (sourceKind === "treg" ? "Treg" : "Custom connector"),
+        source: sourceUrl.trim(),
+        credential: credential.trim() || undefined,
+        config:
+          sourceKind === "treg"
+            ? { preset: "treg", auth: { type: "bearer" } }
+            : sourceKind === "api"
+              ? { openApi: true, auth }
+              : { preset: "custom", auth },
+      });
+      setCredential("");
+      setSourceKind(null);
+      await refresh();
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : t`Could not install connector`);
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function removeSource(install: CapabilityInstall) {
+    setPending(install.id);
+    setSourceError(null);
+    try {
+      await rpc.capabilities.remove({ id: install.id });
+      setSources((current) => current.filter((source) => source.id !== install.id));
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : t`Could not remove connector`);
     } finally {
       setPending(null);
     }
   }
 
   return (
-    <div
-      className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4 sm:p-10"
-      role="presentation"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Plugins"
-        className="flex h-[min(760px,100%)] min-h-0 w-[1080px] max-w-full flex-col overflow-hidden rounded-[26px] border border-[#232326] bg-[#141416] shadow-[0_40px_90px_rgba(0,0,0,.55)]"
-      >
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-10">
+      <div className="flex h-[760px] w-[1080px] max-w-full flex-col overflow-hidden rounded-[26px] border border-[#232326] bg-[#141416] shadow-[0_40px_90px_rgba(0,0,0,.55)]">
         <div className="flex items-start justify-between px-8 pt-7">
-          <div>
-            <div className="text-2xl font-medium text-[#F1F1F2]">Plugins</div>
-            {tab === "mcp" ? (
-              <p className="mt-1 text-[13.5px] text-[#7A7A80]">Manage your MCP servers</p>
-            ) : loading ? (
-              <p className="mt-1 text-[13.5px] text-[#7A7A80]">Loading catalog…</p>
-            ) : null}
+          <div className="text-2xl font-medium text-[#F1F1F2]">
+            <Trans>Integrations</Trans>
           </div>
           <button
             type="button"
-            aria-label="Close plugins"
+            aria-label={t`Close integrations`}
             onClick={onClose}
-            className="text-[#85858A] hover:text-[#ECECEE] transition-colors"
+            className="text-[#85858A]"
           >
             ✕
           </button>
         </div>
 
-        <div role="tablist" aria-label="Plugin sources" className="flex gap-2 border-b border-[#26262A] px-8 pt-4">
+        <div
+          role="tablist"
+          aria-label="Plugin sources"
+          className="flex gap-2 border-b border-[#26262A] px-8 pt-4"
+        >
           <button
             type="button"
             role="tab"
-            aria-selected={tab === "composio"}
-            onClick={() => setTab("composio")}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
-              tab === "composio"
-                ? "border-b-2 border-[#F1F1F2] text-[#F1F1F2]"
-                : "text-[#7A7A80] hover:text-[#ECECEE]"
+            aria-selected={tab === "integrations"}
+            onClick={() => setTab("integrations")}
+            className={`rounded-full px-3 py-1.5 text-xs ${
+              tab === "integrations"
+                ? "bg-[#2A2A30] text-[#F1F1F2]"
+                : "text-[#85858A] hover:text-[#C9C9CE]"
             }`}
           >
-            Composio
+            <Trans>Apps</Trans>
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={tab === "mcp"}
             onClick={() => setTab("mcp")}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
-              tab === "mcp"
-                ? "border-b-2 border-[#F1F1F2] text-[#F1F1F2]"
-                : "text-[#7A7A80] hover:text-[#ECECEE]"
+            className={`rounded-full px-3 py-1.5 text-xs ${
+              tab === "mcp" ? "bg-[#2A2A30] text-[#F1F1F2]" : "text-[#85858A] hover:text-[#C9C9CE]"
             }`}
           >
-            MCP servers
+            <Trans>MCP servers</Trans>
           </button>
         </div>
 
-        {tab === "composio" ? (
+        {tab === "mcp" ? (
+          <div className="rk-scroll flex-1 overflow-y-auto px-8 py-6">
+            <McpServersTab canManage={canManage} />
+          </div>
+        ) : null}
+
+        {tab === "integrations" ? (
           <>
             <div className="px-8 pt-4">
-              <label className="sr-only" htmlFor="plugin-search">
-                Search apps
-              </label>
               <input
-                id="plugin-search"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search apps"
-                className="w-full rounded-[13px] border border-[#26262A] bg-[#101012] px-4 py-3 text-[15px] text-[#ECECEE] outline-none focus:border-[#3C3C40]"
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label={t`Search apps`}
+                placeholder={t`Search apps`}
+                className="w-full rounded-[13px] border border-[#26262A] bg-[#101012] px-4 py-3 text-[15px] text-[#ECECEE] outline-none"
               />
             </div>
-            <div role="tablist" aria-label="Plugin views" className="flex gap-1 px-8 pt-3">
-              {(["all", "connected"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === option}
-                  aria-controls="plugin-list"
-                  onClick={() => setView(option)}
-                  className={`rounded-full px-3.5 py-1.5 text-sm transition-colors ${
-                    view === option
-                      ? "bg-[#2C2C30] text-[#F1F1F2]"
-                      : "text-[#7A7A80] hover:text-[#C8C8CC]"
-                  }`}
-                >
-                  {option === "all" ? "All" : "Connected"}
-                </button>
-              ))}
-            </div>
-            <div
-              id="plugin-list"
-              role="tabpanel"
-              className="rk-scroll min-h-0 flex-1 overflow-y-auto px-8 py-6"
-            >
-              {error ? <p className="mb-4 text-sm text-[#C94244]">{error}</p> : null}
-              {!loading && !error && catalog.length === 0 ? (
-                <p className="text-[#6C6C70]">Composio is not configured on this deployment.</p>
-              ) : null}
-              {!loading && !error && catalog.length > 0 && visible.length === 0 ? (
+
+            <div id="integration-list" className="rk-scroll flex-1 overflow-y-auto px-8 py-6">
+              {catalogError ? <p className="mb-4 text-sm text-[#C94244]">{catalogError}</p> : null}
+              {loading ? (
                 <p className="text-[#6C6C70]">
-                  {view === "connected"
-                    ? query.trim()
-                      ? "No connected apps match your search."
-                      : "No connected apps yet."
-                    : `No apps match “${query}”.`}
+                  <Trans>Loading integrations…</Trans>
                 </p>
               ) : null}
-              {visible.map((item) => (
-                <div
-                  key={item.slug}
-                  className="flex items-center gap-4 rounded-[13px] px-3 py-2.5 hover:bg-[#1C1C1E] transition-colors"
-                >
-                  {item.logo ? (
-                    <img
-                      src={item.logo}
-                      alt=""
-                      className="h-[42px] w-[42px] rounded-xl bg-[#2C2C30] object-contain"
-                    />
+
+              {showFeatured ? (
+                <div className="mb-6" data-testid="featured-connectors">
+                  {!loading && catalog.length === 0 ? (
+                    <p className="text-[13.5px] leading-6 text-[#6C6C70]">
+                      {EMPTY_PLUGIN_CATALOG_MESSAGE}
+                    </p>
                   ) : (
-                    <div className="grid h-[42px] w-[42px] place-items-center rounded-xl bg-[#2C2C30] font-semibold">
-                      {item.name[0]}
+                    <div className="grid grid-cols-2 gap-2">
+                      {featuredTiles.map((tile) => {
+                        const item = tile.item;
+                        const key = item ? itemKey(item) : tile.id;
+                        const disabled = tile.missing || !item;
+                        const connected = item?.connected ?? false;
+                        return (
+                          <div
+                            key={key}
+                            className={`flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2 ${
+                              disabled ? "opacity-70" : ""
+                            }`}
+                          >
+                            {item?.logo ? (
+                              <img
+                                src={item.logo}
+                                alt=""
+                                className="h-9 w-9 shrink-0 rounded-xl bg-[#2C2C30] object-contain"
+                              />
+                            ) : (
+                              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#2C2C30] text-sm font-semibold text-[#ECECEE]">
+                                {tile.label[0]}
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[15px] font-medium text-[#ECECEE]">
+                                {tile.label}
+                              </div>
+                              {disabled ? (
+                                <div className="truncate text-[12.5px] text-[#707077]">
+                                  <Trans>Not in the plugin catalog</Trans>
+                                </div>
+                              ) : null}
+                            </div>
+                            {item && !tile.missing ? (
+                              <Button
+                                type="button"
+                                variant="pill"
+                                size="sm"
+                                disabled={pending === key}
+                                onClick={() => void (connected ? revoke(item) : connect(item))}
+                              >
+                                {pending === key ? (
+                                  connected ? (
+                                    <Trans>Removing…</Trans>
+                                  ) : (
+                                    <Trans>Adding…</Trans>
+                                  )
+                                ) : connected ? (
+                                  <Trans>Remove</Trans>
+                                ) : (
+                                  <Trans>Add</Trans>
+                                )}
+                              </Button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[15.5px] font-medium text-[#ECECEE]">{item.name}</div>
-                    <div className="text-[13.5px] text-[#7A7A80]">
-                      {item.slug}
-                      {item.noAuth ? " · no auth" : ""}
-                    </div>
-                  </div>
-                  {item.connected ? (
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="sm"
-                      disabled={pending === item.slug}
-                      onClick={() => void revoke(item)}
-                    >
-                      {pending === item.slug ? "Revoking…" : "Revoke"}
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="sm"
-                      disabled={pending === item.slug}
-                      onClick={() => void connect(item)}
-                    >
-                      {pending === item.slug ? "Connecting…" : "Connect"}
-                    </Button>
                   )}
                 </div>
-              ))}
+              ) : null}
+
+              {!loading && catalog.length === 0 && !showFeatured ? (
+                <p className="text-[#6C6C70]">
+                  <Trans>No managed app catalog is configured on this deployment.</Trans>
+                </p>
+              ) : null}
+              {!loading && catalog.length > 0 && visible.length === 0 && !showFeatured ? (
+                <p className="text-[#6C6C70]">
+                  <Trans>No apps match your search.</Trans>
+                </p>
+              ) : null}
+              {visible.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {visible.map((item) => {
+                    const key = itemKey(item);
+                    return (
+                      <div
+                        key={key}
+                        className="flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2"
+                      >
+                        {item.logo ? (
+                          <img
+                            src={item.logo}
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded-xl bg-[#2C2C30] object-contain"
+                          />
+                        ) : (
+                          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#2C2C30] text-sm font-semibold text-[#ECECEE]">
+                            {item.name[0]}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[15px] font-medium text-[#ECECEE]">
+                            {item.name}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === key}
+                          onClick={() => void (item.connected ? revoke(item) : connect(item))}
+                        >
+                          {pending === key ? (
+                            item.connected ? (
+                              <Trans>Removing…</Trans>
+                            ) : (
+                              <Trans>Adding…</Trans>
+                            )
+                          ) : item.connected ? (
+                            <Trans>Remove</Trans>
+                          ) : (
+                            <Trans>Add</Trans>
+                          )}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <details
+                data-testid="integrations-advanced"
+                className="group mt-8"
+                onToggle={(event) => {
+                  if (!(event.currentTarget as HTMLDetailsElement).open) {
+                    setSourceKind(null);
+                    setSourceError(null);
+                    setSourceName("");
+                    setSourceUrl("");
+                    setCredential("");
+                    setAuthType("none");
+                    setAuthName("x-api-key");
+                  }
+                }}
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[14px] text-[#85858A]">
+                  <span className="text-[#85858A]">
+                    <Trans>Advanced</Trans>
+                  </span>
+                  <span aria-hidden="true" className="transition-transform group-open:rotate-90">
+                    ›
+                  </span>
+                </summary>
+
+                <div className="mt-4 space-y-4">
+                  {onOpenMcp ? (
+                    <button
+                      type="button"
+                      onClick={onOpenMcp}
+                      className="rounded-full border border-[#383844] px-3 py-1.5 text-xs text-[#C9C9CE] hover:bg-[#232327]"
+                    >
+                      <Trans>MCP servers</Trans>
+                    </button>
+                  ) : null}
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="sm"
+                      onClick={() => beginSource("mcp")}
+                    >
+                      <Trans>Add MCP server</Trans>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="sm"
+                      onClick={() => beginSource("api")}
+                    >
+                      <Trans>Add OpenAPI</Trans>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="sm"
+                      onClick={() => beginSource("treg")}
+                    >
+                      <Trans>Add Treg</Trans>
+                    </Button>
+                  </div>
+
+                  {sourceError ? <p className="text-sm text-[#C94244]">{sourceError}</p> : null}
+
+                  {sourceKind ? (
+                    <div className="space-y-3 rounded-[16px] border border-[#2C2C30] bg-[#101012] p-5">
+                      <div className="text-base font-medium text-[#ECECEE]">
+                        {sourceKind === "treg" ? (
+                          <Trans>Connect Treg</Trans>
+                        ) : sourceKind === "mcp" ? (
+                          <Trans>Add remote MCP server</Trans>
+                        ) : (
+                          <Trans>Import OpenAPI JSON</Trans>
+                        )}
+                      </div>
+                      <input
+                        value={sourceName}
+                        onChange={(event) => setSourceName(event.target.value)}
+                        placeholder={t`Display name`}
+                        className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                      />
+                      {sourceKind !== "treg" ? (
+                        <input
+                          value={sourceUrl}
+                          onChange={(event) => setSourceUrl(event.target.value)}
+                          placeholder={
+                            sourceKind === "mcp"
+                              ? "https://example.com/mcp"
+                              : "https://example.com/openapi.json"
+                          }
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      {sourceKind !== "treg" ? (
+                        <select
+                          value={authType}
+                          onChange={(event) => setAuthType(event.target.value as typeof authType)}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        >
+                          <option value="none">
+                            <Trans>No authentication</Trans>
+                          </option>
+                          <option value="bearer">
+                            <Trans>Bearer token</Trans>
+                          </option>
+                          <option value="header">
+                            <Trans>API key header</Trans>
+                          </option>
+                        </select>
+                      ) : null}
+                      {authType === "header" && sourceKind !== "treg" ? (
+                        <input
+                          value={authName}
+                          onChange={(event) => setAuthName(event.target.value)}
+                          placeholder={t`Header name`}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      {sourceKind === "treg" || authType !== "none" ? (
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={credential}
+                          onChange={(event) => setCredential(event.target.value)}
+                          placeholder={sourceKind === "treg" ? t`Treg token` : t`Credential`}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      <p className="text-xs leading-5 text-[#707077]">
+                        <Trans>
+                          Rakazo verifies the source before saving it. Credentials are encrypted and
+                          are never returned to clients or exposed to the model.
+                        </Trans>
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === "install-source"}
+                          onClick={() => void installSource()}
+                        >
+                          {pending === "install-source" ? (
+                            <Trans>Verifying…</Trans>
+                          ) : (
+                            <Trans>Verify and add</Trans>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          onClick={() => setSourceKind(null)}
+                        >
+                          <Trans>Cancel</Trans>
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div>
+                    <div className="mb-3 text-sm font-medium text-[#A8A8AD]">
+                      <Trans>Tool sources</Trans>
+                    </div>
+                    {sources.length === 0 && !sourceKind ? (
+                      <p className="text-[#6C6C70]">
+                        <Trans>No MCP or API tool sources installed yet.</Trans>
+                      </p>
+                    ) : null}
+                    {sources.map((source) => (
+                      <div
+                        key={source.id}
+                        className="flex items-center gap-4 rounded-[13px] px-3 py-2.5"
+                      >
+                        <div className="grid h-[42px] w-[42px] place-items-center rounded-xl bg-[#2C2C30] font-semibold uppercase text-[#ECECEE]">
+                          {source.kind === "mcp" ? "M" : "A"}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[15.5px] font-medium text-[#ECECEE]">
+                            {source.name}
+                          </div>
+                          <div className="truncate text-[13.5px] text-[#7A7A80]">
+                            {source.kind.toUpperCase()} · {source.source} ·{" "}
+                            {source.secretConfigured ? (
+                              <Trans>credential saved</Trans>
+                            ) : (
+                              <Trans>no auth</Trans>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === source.id}
+                          onClick={() => void removeSource(source)}
+                        >
+                          {pending === source.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </details>
             </div>
           </>
-        ) : (
-          <McpServersTab canManage={canManage} onEditorOpenChange={setMcpEditorOpen} />
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ import type {
   AgentRuntime,
   AgentRuntimeEvent,
 } from "@rakazo/adapter-kit";
-import { abortableDelay } from "@rakazo/core";
+import { abortableDelay, inferHandoffTargetName } from "@rakazo/core";
 
 const running = new Map<string, AbortController>();
 
@@ -22,10 +22,13 @@ export class ScriptedAgentRuntime implements AgentRuntime {
     running.get(runId)?.abort();
   }
 
-  async *run(request: AgentRunRequest, context: AdapterContext): AsyncIterable<AgentRuntimeEvent> {
+  async *run(
+    request: AgentRunRequest,
+    context?: Partial<AdapterContext>,
+  ): AsyncIterable<AgentRuntimeEvent> {
     const controller = new AbortController();
     running.set(request.runId, controller);
-    const signal = context.signal ?? controller.signal;
+    const signal = context?.signal ?? controller.signal;
     try {
       if (shouldHang(request.prompt)) {
         yield { type: "progress", text: "still working…" };
@@ -117,11 +120,15 @@ export function inferScript(
   resumeFromCheckpoint?: string,
 ): NonNullable<AgentRunRequest["script"]> {
   const lower = prompt.toLowerCase();
-  if (
-    resumeFromCheckpoint === "takeover" ||
-    lower.includes("completed sign-in") ||
-    lower.includes("continue without requesting takeover")
-  ) {
+  if (resumeFromCheckpoint === "takeover-skipped") {
+    return [
+      {
+        assistant: "login was skipped. continuing without treating sign-in as done.",
+        complete: true,
+      },
+    ];
+  }
+  if (resumeFromCheckpoint === "takeover") {
     return [
       {
         assistant:
@@ -215,6 +222,29 @@ export function inferScript(
       {
         assistant: "spinning up a helper for that.",
         toolCalls: [{ name: "run_subagent", args: { name: "helper", task: prompt } }],
+        complete: true,
+      },
+    ];
+  }
+  if (
+    lower.includes("hand this to") ||
+    lower.includes("hand off to") ||
+    lower.includes("handoff to") ||
+    (lower.includes("@writer") && lower.includes("draft"))
+  ) {
+    const target = inferHandoffTargetName(prompt) ?? "Writer";
+    return [
+      {
+        assistant: "handing this off in the group thread.",
+        toolCalls: [
+          {
+            name: "handoff_to_bot",
+            args: {
+              confirm_name: target,
+              message: prompt,
+            },
+          },
+        ],
         complete: true,
       },
     ];

@@ -24,7 +24,9 @@ describe("embeddableScreenUrl", () => {
         "http://10.0.0.32:5173/",
       ),
     ).toBeNull();
-    expect(embeddableScreenUrl("http://localhost:16080/embed.html", "http://10.0.0.32:5173/")).toBeNull();
+    expect(
+      embeddableScreenUrl("http://localhost:16080/embed.html", "http://10.0.0.32:5173/"),
+    ).toBeNull();
   });
 
   it("still rejects a different-port loopback VNC when the page is loopback", () => {

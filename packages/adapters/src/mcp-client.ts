@@ -210,13 +210,15 @@ export class McpClient implements ConnectorProvider {
         const { tools } = await connection.client.listTools();
         connection.toolCount = tools.length;
         for (const tool of tools) {
+          const name = `${serverName}.${tool.name}`;
           allTools.push({
-            name: `${serverName}.${tool.name}`,
+            name,
             description: tool.description ?? tool.name,
             inputSchema: (tool.inputSchema as Record<string, unknown>) ?? {
               type: "object",
               properties: {},
             },
+            route: { connectorId: "mcp-client", toolName: name },
           });
         }
       } catch (error) {
@@ -362,8 +364,15 @@ export function parseMcpConfig(
   return parseMcpConfigFromEnv(envVars);
 }
 
-export function parseMcpConfigFromEnv(envVars: Record<string, string | undefined>): McpClientConfig {
-  return { servers: [...serversFromConfigPath(envVars.MCP_CONFIG_PATH), ...serversFromEnvJson(envVars.MCP_SERVERS)] };
+export function parseMcpConfigFromEnv(
+  envVars: Record<string, string | undefined>,
+): McpClientConfig {
+  return {
+    servers: [
+      ...serversFromConfigPath(envVars.MCP_CONFIG_PATH),
+      ...serversFromEnvJson(envVars.MCP_SERVERS),
+    ],
+  };
 }
 
 async function parseMcpConfigAsync(

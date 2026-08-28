@@ -5,7 +5,7 @@ test("voice settings connect a key, speak a reply, and open a call", async ({ pa
   const stamp = Date.now();
   const userName = `Voice ${stamp}`;
   await signup(page, `voice-${stamp}@rakazo.test`, "password12", userName);
-  await completeOnboarding(page, ["A bit of everything", "Clear and tight"]);
+  await completeOnboarding(page);
 
   await page.getByRole("button", { name: "Call" }).click();
   await expect(page.getByTestId("voice-settings")).toBeVisible();
@@ -49,14 +49,16 @@ test("voice settings connect a key, speak a reply, and open a call", async ({ pa
   const composer = page.getByPlaceholder(/Message/);
   await composer.fill("say hello");
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "Speak this reply" })).toBeVisible({
+  // A reply can render more than one text bubble; speak the latest one.
+  const speakReply = page.getByRole("button", { name: "Speak this reply" }).last();
+  await expect(speakReply).toBeVisible({
     timeout: 30_000,
   });
 
   const replySpoken = page.waitForResponse(
     (response) => response.url().includes("/api/voice/speak") && response.ok(),
   );
-  await page.getByRole("button", { name: "Speak this reply" }).click();
+  await speakReply.click();
   await replySpoken;
 
   await page.getByRole("button", { name: "Call" }).click();
