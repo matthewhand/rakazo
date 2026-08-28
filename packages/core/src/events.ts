@@ -88,6 +88,29 @@ export function projectMessages(
       continue;
     }
     if (event.type === "agent.tool.called") {
+      if (payload.status || payload.args || payload.result) {
+        const block = toolBlockFromPayload(payload);
+        const existing = liveTools.get(block.executionId);
+        const existingStatus =
+          existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+        if (
+          !(
+            (existingStatus === "completed" || existingStatus === "failed") &&
+            block.status === "running"
+          )
+        ) {
+          liveTools.set(block.executionId, {
+            id: `tool:${block.executionId}`,
+            threadId: event.threadId,
+            seq: event.seq,
+            role: "bot",
+            blocks: [block],
+            runId: event.runId ?? undefined,
+            createdAt,
+          });
+        }
+        continue;
+      }
       const live = liveProjection(event, createdAt);
       live.blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "tool",
@@ -99,23 +122,6 @@ export function projectMessages(
         botId: event.botId ?? undefined,
         createdAt,
       };
-      const block = toolBlockFromPayload(payload);
-      const existing = liveTools.get(block.executionId);
-      const existingStatus =
-        existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
-      if (
-        !((existingStatus === "completed" || existingStatus === "failed") && block.status === "running")
-      ) {
-        liveTools.set(block.executionId, {
-          id: `tool:${block.executionId}`,
-          threadId: event.threadId,
-          seq: event.seq,
-          role: "bot",
-          blocks: [block],
-          runId: event.runId ?? undefined,
-          createdAt,
-        });
-      }
       continue;
     }
     if (event.type === "thread.cleared") {

@@ -1206,7 +1206,12 @@ export default function Thread() {
   );
 }
 
-function commsKindLabel(block: MobileMessage["blocks"][number]) {
+type CommsBlock = Extract<
+  MobileMessage["blocks"][number],
+  { kind: "subagent" | "child_bot" | "tool" }
+>;
+
+function commsKindLabel(block: CommsBlock) {
   if (block.kind === "subagent") {
     if (block.status === "failed") return "failed";
     if (block.status === "completed") return "helper";
@@ -1225,12 +1230,16 @@ function CommsPill({
   block,
   onOpenBot,
 }: {
-  block: MobileMessage["blocks"][number];
+  block: CommsBlock;
   onOpenBot: (botId: string, name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const running = block.status === "running" || (!block.status && block.kind !== "child_bot");
-  const failed = block.status === "failed";
+  const running =
+    (block.kind === "subagent" && block.status === "running") ||
+    (block.kind === "tool" && (block.status ?? "running") === "running");
+  const failed =
+    (block.kind === "subagent" && block.status === "failed") ||
+    (block.kind === "tool" && block.status === "failed");
   const label = block.name || commsKindLabel(block);
   return (
     <View style={{ width: "90%" }}>

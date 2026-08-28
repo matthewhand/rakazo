@@ -322,11 +322,37 @@ export function reduceThreadSnapshot(
     return { ...prev, cursor: event.seq, messages: [...remaining, streaming] };
   }
   if (event.type === "agent.tool.called") {
+    const payload = event.payload;
+    if (payload.status || payload.args || payload.result) {
+      const block = toolBlockFromPayload(payload);
+      const existing = prev.messages.find((message) => message.id === `tool:${block.executionId}`);
+      const existingStatus =
+        existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+      if (
+        (existingStatus === "completed" || existingStatus === "failed") &&
+        block.status === "running"
+      ) {
+        return { ...prev, cursor: event.seq };
+      }
+      const pill: ThreadMessage = {
+        id: `tool:${block.executionId}`,
+        threadId: event.threadId,
+        seq: event.seq,
+        role: "bot",
+        blocks: [block],
+        runId: event.runId,
+        createdAt: event.createdAt,
+      };
+      const without = prev.messages.filter((message) => message.id !== pill.id);
+      const progress = without.filter((message) => message.id.startsWith("progress:"));
+      const rest = without.filter((message) => !message.id.startsWith("progress:"));
+      return { ...prev, cursor: event.seq, messages: [...rest, pill, ...progress] };
+    }
     const liveId = progressMessageId(event);
     const { previous, remaining } = takeLiveMessage(prev.messages, liveId);
     const liveBlocks = reduceLiveMessageBlocks(previous?.blocks ?? [], {
       type: "tool",
-      name: String(event.payload.name ?? ""),
+      name: String(payload.name ?? ""),
     });
     const streaming: ThreadMessage = {
       id: liveId,
@@ -338,27 +364,7 @@ export function reduceThreadSnapshot(
       runId: event.runId,
       createdAt: event.createdAt,
     };
-    const block = toolBlockFromPayload(event.payload);
-    const existing = remaining.find((message) => message.id === `tool:${block.executionId}`);
-    const existingStatus =
-      existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
-    if (
-      (existingStatus === "completed" || existingStatus === "failed") &&
-      block.status === "running"
-    ) {
-      return { ...prev, cursor: event.seq, messages: [...remaining, streaming] };
-    }
-    const pill: ThreadMessage = {
-      id: `tool:${block.executionId}`,
-      threadId: event.threadId,
-      seq: event.seq,
-      role: "bot",
-      blocks: [block],
-      runId: event.runId,
-      createdAt: event.createdAt,
-    };
-    const without = remaining.filter((message) => message.id !== pill.id);
-    return { ...prev, cursor: event.seq, messages: [...without, pill, streaming] };
+    return { ...prev, cursor: event.seq, messages: [...remaining, streaming] };
   }
   if (event.type === "thread.subagent") {
     const block = subagentBlockFromPayload(event.payload);
@@ -413,7 +419,6 @@ export function reduceThreadSnapshot(
         message.id !== next.id &&
         !replacedSubagent(message, replacedSubagentIds) &&
         !replacedTool(message, replacedToolIds),
-    );
     );
     return { ...prev, cursor: event.seq, messages: [...without, next] };
   }

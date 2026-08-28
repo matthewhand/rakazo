@@ -435,11 +435,18 @@ export function applyMobileThreadEvent(
     };
   }
   if (event.type === "agent.tool.called") {
-    const executionId = String(event.payload?.executionId ?? event.payload?.name ?? event.id ?? "tool");
+    const executionId = String(
+      event.payload?.executionId ?? event.payload?.name ?? event.id ?? "tool",
+    );
     const existing = prev.messages.find((message) => message.id === `tool:${executionId}`);
-    const existingStatus = existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
-    const nextStatus = String(event.payload?.status ?? "running");
-    if ((existingStatus === "completed" || existingStatus === "failed") && nextStatus === "running") {
+    const existingStatus =
+      existing?.blocks[0]?.kind === "tool" ? existing.blocks[0].status : undefined;
+    const rawStatus = String(event.payload?.status ?? "running");
+    const nextStatus = rawStatus === "completed" || rawStatus === "failed" ? rawStatus : "running";
+    if (
+      (existingStatus === "completed" || existingStatus === "failed") &&
+      nextStatus === "running"
+    ) {
       return prev;
     }
     const streaming: MobileMessage = {
@@ -450,7 +457,7 @@ export function applyMobileThreadEvent(
           kind: "tool",
           executionId,
           name: String(event.payload?.name ?? "tool"),
-          status: String(event.payload?.status ?? "running"),
+          status: nextStatus,
           result: event.payload?.result ? String(event.payload.result) : undefined,
           args:
             event.payload?.args && typeof event.payload.args === "object"

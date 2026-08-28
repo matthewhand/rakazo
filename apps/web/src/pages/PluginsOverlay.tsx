@@ -253,7 +253,11 @@ export function PluginsOverlay({
           </button>
         </div>
 
-        <div role="tablist" aria-label="Plugin sources" className="flex gap-2 border-b border-[#26262A] px-8 pt-4">
+        <div
+          role="tablist"
+          aria-label="Plugin sources"
+          className="flex gap-2 border-b border-[#26262A] px-8 pt-4"
+        >
           <button
             type="button"
             role="tab"
@@ -287,45 +291,115 @@ export function PluginsOverlay({
         ) : null}
 
         {tab === "integrations" ? (
-        <div className="px-8 pt-4">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label={t`Search apps`}
-            placeholder={t`Search apps`}
-            className="w-full rounded-[13px] border border-[#26262A] bg-[#101012] px-4 py-3 text-[15px] text-[#ECECEE] outline-none"
-          />
-        </div>
+          <>
+            <div className="px-8 pt-4">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label={t`Search apps`}
+                placeholder={t`Search apps`}
+                className="w-full rounded-[13px] border border-[#26262A] bg-[#101012] px-4 py-3 text-[15px] text-[#ECECEE] outline-none"
+              />
+            </div>
 
-        <div id="integration-list" className="rk-scroll flex-1 overflow-y-auto px-8 py-6">
-          {catalogError ? <p className="mb-4 text-sm text-[#C94244]">{catalogError}</p> : null}
-          {loading ? (
-            <p className="text-[#6C6C70]">
-              <Trans>Loading integrations…</Trans>
-            </p>
-          ) : null}
-
-          {showFeatured ? (
-            <div className="mb-6" data-testid="featured-connectors">
-              {!loading && catalog.length === 0 ? (
-                <p className="text-[13.5px] leading-6 text-[#6C6C70]">
-                  {EMPTY_PLUGIN_CATALOG_MESSAGE}
+            <div id="integration-list" className="rk-scroll flex-1 overflow-y-auto px-8 py-6">
+              {catalogError ? <p className="mb-4 text-sm text-[#C94244]">{catalogError}</p> : null}
+              {loading ? (
+                <p className="text-[#6C6C70]">
+                  <Trans>Loading integrations…</Trans>
                 </p>
-              ) : (
+              ) : null}
+
+              {showFeatured ? (
+                <div className="mb-6" data-testid="featured-connectors">
+                  {!loading && catalog.length === 0 ? (
+                    <p className="text-[13.5px] leading-6 text-[#6C6C70]">
+                      {EMPTY_PLUGIN_CATALOG_MESSAGE}
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {featuredTiles.map((tile) => {
+                        const item = tile.item;
+                        const key = item ? itemKey(item) : tile.id;
+                        const disabled = tile.missing || !item;
+                        const connected = item?.connected ?? false;
+                        return (
+                          <div
+                            key={key}
+                            className={`flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2 ${
+                              disabled ? "opacity-70" : ""
+                            }`}
+                          >
+                            {item?.logo ? (
+                              <img
+                                src={item.logo}
+                                alt=""
+                                className="h-9 w-9 shrink-0 rounded-xl bg-[#2C2C30] object-contain"
+                              />
+                            ) : (
+                              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#2C2C30] text-sm font-semibold text-[#ECECEE]">
+                                {tile.label[0]}
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[15px] font-medium text-[#ECECEE]">
+                                {tile.label}
+                              </div>
+                              {disabled ? (
+                                <div className="truncate text-[12.5px] text-[#707077]">
+                                  <Trans>Not in the plugin catalog</Trans>
+                                </div>
+                              ) : null}
+                            </div>
+                            {item && !tile.missing ? (
+                              <Button
+                                type="button"
+                                variant="pill"
+                                size="sm"
+                                disabled={pending === key}
+                                onClick={() => void (connected ? revoke(item) : connect(item))}
+                              >
+                                {pending === key ? (
+                                  connected ? (
+                                    <Trans>Removing…</Trans>
+                                  ) : (
+                                    <Trans>Adding…</Trans>
+                                  )
+                                ) : connected ? (
+                                  <Trans>Remove</Trans>
+                                ) : (
+                                  <Trans>Add</Trans>
+                                )}
+                              </Button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {!loading && catalog.length === 0 && !showFeatured ? (
+                <p className="text-[#6C6C70]">
+                  <Trans>No managed app catalog is configured on this deployment.</Trans>
+                </p>
+              ) : null}
+              {!loading && catalog.length > 0 && visible.length === 0 && !showFeatured ? (
+                <p className="text-[#6C6C70]">
+                  <Trans>No apps match your search.</Trans>
+                </p>
+              ) : null}
+              {visible.length > 0 ? (
                 <div className="grid grid-cols-2 gap-2">
-                  {featuredTiles.map((tile) => {
-                    const item = tile.item;
-                    const key = item ? itemKey(item) : tile.id;
-                    const disabled = tile.missing || !item;
-                    const connected = item?.connected ?? false;
+                  {visible.map((item) => {
+                    const key = itemKey(item);
                     return (
                       <div
                         key={key}
-                        className={`flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2 ${
-                          disabled ? "opacity-70" : ""
-                        }`}
+                        className="flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2"
                       >
-                        {item?.logo ? (
+                        {item.logo ? (
                           <img
                             src={item.logo}
                             alt=""
@@ -333,296 +407,245 @@ export function PluginsOverlay({
                           />
                         ) : (
                           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#2C2C30] text-sm font-semibold text-[#ECECEE]">
-                            {tile.label[0]}
+                            {item.name[0]}
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-[15px] font-medium text-[#ECECEE]">
-                            {tile.label}
+                            {item.name}
                           </div>
-                          {disabled ? (
-                            <div className="truncate text-[12.5px] text-[#707077]">
-                              <Trans>Not in the plugin catalog</Trans>
-                            </div>
-                          ) : null}
                         </div>
-                        {item && !tile.missing ? (
-                          <Button
-                            type="button"
-                            variant="pill"
-                            size="sm"
-                            disabled={pending === key}
-                            onClick={() => void (connected ? revoke(item) : connect(item))}
-                          >
-                            {pending === key ? (
-                              connected ? (
-                                <Trans>Removing…</Trans>
-                              ) : (
-                                <Trans>Adding…</Trans>
-                              )
-                            ) : connected ? (
-                              <Trans>Remove</Trans>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === key}
+                          onClick={() => void (item.connected ? revoke(item) : connect(item))}
+                        >
+                          {pending === key ? (
+                            item.connected ? (
+                              <Trans>Removing…</Trans>
                             ) : (
-                              <Trans>Add</Trans>
-                            )}
-                          </Button>
-                        ) : null}
+                              <Trans>Adding…</Trans>
+                            )
+                          ) : item.connected ? (
+                            <Trans>Remove</Trans>
+                          ) : (
+                            <Trans>Add</Trans>
+                          )}
+                        </Button>
                       </div>
                     );
                   })}
                 </div>
-              )}
-            </div>
-          ) : null}
-
-          {!loading && catalog.length === 0 && !showFeatured ? (
-            <p className="text-[#6C6C70]">
-              <Trans>No managed app catalog is configured on this deployment.</Trans>
-            </p>
-          ) : null}
-          {!loading && catalog.length > 0 && visible.length === 0 && !showFeatured ? (
-            <p className="text-[#6C6C70]">
-              <Trans>No apps match your search.</Trans>
-            </p>
-          ) : null}
-          {visible.length > 0 ? (
-            <div className="grid grid-cols-2 gap-2">
-              {visible.map((item) => {
-                const key = itemKey(item);
-                return (
-                  <div
-                    key={key}
-                    className="flex min-w-0 items-center gap-3 rounded-[13px] px-2.5 py-2"
-                  >
-                    {item.logo ? (
-                      <img
-                        src={item.logo}
-                        alt=""
-                        className="h-9 w-9 shrink-0 rounded-xl bg-[#2C2C30] object-contain"
-                      />
-                    ) : (
-                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#2C2C30] text-sm font-semibold text-[#ECECEE]">
-                        {item.name[0]}
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[15px] font-medium text-[#ECECEE]">
-                        {item.name}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="sm"
-                      disabled={pending === key}
-                      onClick={() => void (item.connected ? revoke(item) : connect(item))}
-                    >
-                      {pending === key ? (
-                        item.connected ? (
-                          <Trans>Removing…</Trans>
-                        ) : (
-                          <Trans>Adding…</Trans>
-                        )
-                      ) : item.connected ? (
-                        <Trans>Remove</Trans>
-                      ) : (
-                        <Trans>Add</Trans>
-                      )}
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-
-          <details
-            data-testid="integrations-advanced"
-            className="group mt-8"
-            onToggle={(event) => {
-              if (!(event.currentTarget as HTMLDetailsElement).open) {
-                setSourceKind(null);
-                setSourceError(null);
-                setSourceName("");
-                setSourceUrl("");
-                setCredential("");
-                setAuthType("none");
-                setAuthName("x-api-key");
-              }
-            }}
-          >
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[14px] text-[#85858A]">
-              <span className="text-[#85858A]">
-                <Trans>Advanced</Trans>
-              </span>
-              <span aria-hidden="true" className="transition-transform group-open:rotate-90">
-                ›
-              </span>
-            </summary>
-
-            <div className="mt-4 space-y-4">
-              {onOpenMcp ? (
-                <button
-                  type="button"
-                  onClick={onOpenMcp}
-                  className="rounded-full border border-[#383844] px-3 py-1.5 text-xs text-[#C9C9CE] hover:bg-[#232327]"
-                >
-                  <Trans>MCP servers</Trans>
-                </button>
               ) : null}
 
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="pill" size="sm" onClick={() => beginSource("mcp")}>
-                  <Trans>Add MCP server</Trans>
-                </Button>
-                <Button type="button" variant="pill" size="sm" onClick={() => beginSource("api")}>
-                  <Trans>Add OpenAPI</Trans>
-                </Button>
-                <Button type="button" variant="pill" size="sm" onClick={() => beginSource("treg")}>
-                  <Trans>Add Treg</Trans>
-                </Button>
-              </div>
+              <details
+                data-testid="integrations-advanced"
+                className="group mt-8"
+                onToggle={(event) => {
+                  if (!(event.currentTarget as HTMLDetailsElement).open) {
+                    setSourceKind(null);
+                    setSourceError(null);
+                    setSourceName("");
+                    setSourceUrl("");
+                    setCredential("");
+                    setAuthType("none");
+                    setAuthName("x-api-key");
+                  }
+                }}
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[14px] text-[#85858A]">
+                  <span className="text-[#85858A]">
+                    <Trans>Advanced</Trans>
+                  </span>
+                  <span aria-hidden="true" className="transition-transform group-open:rotate-90">
+                    ›
+                  </span>
+                </summary>
 
-              {sourceError ? <p className="text-sm text-[#C94244]">{sourceError}</p> : null}
-
-              {sourceKind ? (
-                <div className="space-y-3 rounded-[16px] border border-[#2C2C30] bg-[#101012] p-5">
-                  <div className="text-base font-medium text-[#ECECEE]">
-                    {sourceKind === "treg" ? (
-                      <Trans>Connect Treg</Trans>
-                    ) : sourceKind === "mcp" ? (
-                      <Trans>Add remote MCP server</Trans>
-                    ) : (
-                      <Trans>Import OpenAPI JSON</Trans>
-                    )}
-                  </div>
-                  <input
-                    value={sourceName}
-                    onChange={(event) => setSourceName(event.target.value)}
-                    placeholder={t`Display name`}
-                    className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
-                  />
-                  {sourceKind !== "treg" ? (
-                    <input
-                      value={sourceUrl}
-                      onChange={(event) => setSourceUrl(event.target.value)}
-                      placeholder={
-                        sourceKind === "mcp"
-                          ? "https://example.com/mcp"
-                          : "https://example.com/openapi.json"
-                      }
-                      className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
-                    />
-                  ) : null}
-                  {sourceKind !== "treg" ? (
-                    <select
-                      value={authType}
-                      onChange={(event) => setAuthType(event.target.value as typeof authType)}
-                      className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                <div className="mt-4 space-y-4">
+                  {onOpenMcp ? (
+                    <button
+                      type="button"
+                      onClick={onOpenMcp}
+                      className="rounded-full border border-[#383844] px-3 py-1.5 text-xs text-[#C9C9CE] hover:bg-[#232327]"
                     >
-                      <option value="none">
-                        <Trans>No authentication</Trans>
-                      </option>
-                      <option value="bearer">
-                        <Trans>Bearer token</Trans>
-                      </option>
-                      <option value="header">
-                        <Trans>API key header</Trans>
-                      </option>
-                    </select>
+                      <Trans>MCP servers</Trans>
+                    </button>
                   ) : null}
-                  {authType === "header" && sourceKind !== "treg" ? (
-                    <input
-                      value={authName}
-                      onChange={(event) => setAuthName(event.target.value)}
-                      placeholder={t`Header name`}
-                      className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
-                    />
-                  ) : null}
-                  {sourceKind === "treg" || authType !== "none" ? (
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={credential}
-                      onChange={(event) => setCredential(event.target.value)}
-                      placeholder={sourceKind === "treg" ? t`Treg token` : t`Credential`}
-                      className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
-                    />
-                  ) : null}
-                  <p className="text-xs leading-5 text-[#707077]">
-                    <Trans>
-                      Rakazo verifies the source before saving it. Credentials are encrypted and are
-                      never returned to clients or exposed to the model.
-                    </Trans>
-                  </p>
-                  <div className="flex gap-2">
+
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
                       variant="pill"
                       size="sm"
-                      disabled={pending === "install-source"}
-                      onClick={() => void installSource()}
+                      onClick={() => beginSource("mcp")}
                     >
-                      {pending === "install-source" ? (
-                        <Trans>Verifying…</Trans>
-                      ) : (
-                        <Trans>Verify and add</Trans>
-                      )}
+                      <Trans>Add MCP server</Trans>
                     </Button>
                     <Button
                       type="button"
                       variant="pill"
                       size="sm"
-                      onClick={() => setSourceKind(null)}
+                      onClick={() => beginSource("api")}
                     >
-                      <Trans>Cancel</Trans>
+                      <Trans>Add OpenAPI</Trans>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="sm"
+                      onClick={() => beginSource("treg")}
+                    >
+                      <Trans>Add Treg</Trans>
                     </Button>
                   </div>
-                </div>
-              ) : null}
 
-              <div>
-                <div className="mb-3 text-sm font-medium text-[#A8A8AD]">
-                  <Trans>Tool sources</Trans>
-                </div>
-                {sources.length === 0 && !sourceKind ? (
-                  <p className="text-[#6C6C70]">
-                    <Trans>No MCP or API tool sources installed yet.</Trans>
-                  </p>
-                ) : null}
-                {sources.map((source) => (
-                  <div
-                    key={source.id}
-                    className="flex items-center gap-4 rounded-[13px] px-3 py-2.5"
-                  >
-                    <div className="grid h-[42px] w-[42px] place-items-center rounded-xl bg-[#2C2C30] font-semibold uppercase text-[#ECECEE]">
-                      {source.kind === "mcp" ? "M" : "A"}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[15.5px] font-medium text-[#ECECEE]">{source.name}</div>
-                      <div className="truncate text-[13.5px] text-[#7A7A80]">
-                        {source.kind.toUpperCase()} · {source.source} ·{" "}
-                        {source.secretConfigured ? (
-                          <Trans>credential saved</Trans>
+                  {sourceError ? <p className="text-sm text-[#C94244]">{sourceError}</p> : null}
+
+                  {sourceKind ? (
+                    <div className="space-y-3 rounded-[16px] border border-[#2C2C30] bg-[#101012] p-5">
+                      <div className="text-base font-medium text-[#ECECEE]">
+                        {sourceKind === "treg" ? (
+                          <Trans>Connect Treg</Trans>
+                        ) : sourceKind === "mcp" ? (
+                          <Trans>Add remote MCP server</Trans>
                         ) : (
-                          <Trans>no auth</Trans>
+                          <Trans>Import OpenAPI JSON</Trans>
                         )}
                       </div>
+                      <input
+                        value={sourceName}
+                        onChange={(event) => setSourceName(event.target.value)}
+                        placeholder={t`Display name`}
+                        className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                      />
+                      {sourceKind !== "treg" ? (
+                        <input
+                          value={sourceUrl}
+                          onChange={(event) => setSourceUrl(event.target.value)}
+                          placeholder={
+                            sourceKind === "mcp"
+                              ? "https://example.com/mcp"
+                              : "https://example.com/openapi.json"
+                          }
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      {sourceKind !== "treg" ? (
+                        <select
+                          value={authType}
+                          onChange={(event) => setAuthType(event.target.value as typeof authType)}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        >
+                          <option value="none">
+                            <Trans>No authentication</Trans>
+                          </option>
+                          <option value="bearer">
+                            <Trans>Bearer token</Trans>
+                          </option>
+                          <option value="header">
+                            <Trans>API key header</Trans>
+                          </option>
+                        </select>
+                      ) : null}
+                      {authType === "header" && sourceKind !== "treg" ? (
+                        <input
+                          value={authName}
+                          onChange={(event) => setAuthName(event.target.value)}
+                          placeholder={t`Header name`}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      {sourceKind === "treg" || authType !== "none" ? (
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={credential}
+                          onChange={(event) => setCredential(event.target.value)}
+                          placeholder={sourceKind === "treg" ? t`Treg token` : t`Credential`}
+                          className="w-full rounded-xl border border-[#2C2C30] bg-[#171719] px-3 py-2.5 text-sm text-[#ECECEE] outline-none"
+                        />
+                      ) : null}
+                      <p className="text-xs leading-5 text-[#707077]">
+                        <Trans>
+                          Rakazo verifies the source before saving it. Credentials are encrypted and
+                          are never returned to clients or exposed to the model.
+                        </Trans>
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === "install-source"}
+                          onClick={() => void installSource()}
+                        >
+                          {pending === "install-source" ? (
+                            <Trans>Verifying…</Trans>
+                          ) : (
+                            <Trans>Verify and add</Trans>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          onClick={() => setSourceKind(null)}
+                        >
+                          <Trans>Cancel</Trans>
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="sm"
-                      disabled={pending === source.id}
-                      onClick={() => void removeSource(source)}
-                    >
-                      {pending === source.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
-                    </Button>
+                  ) : null}
+
+                  <div>
+                    <div className="mb-3 text-sm font-medium text-[#A8A8AD]">
+                      <Trans>Tool sources</Trans>
+                    </div>
+                    {sources.length === 0 && !sourceKind ? (
+                      <p className="text-[#6C6C70]">
+                        <Trans>No MCP or API tool sources installed yet.</Trans>
+                      </p>
+                    ) : null}
+                    {sources.map((source) => (
+                      <div
+                        key={source.id}
+                        className="flex items-center gap-4 rounded-[13px] px-3 py-2.5"
+                      >
+                        <div className="grid h-[42px] w-[42px] place-items-center rounded-xl bg-[#2C2C30] font-semibold uppercase text-[#ECECEE]">
+                          {source.kind === "mcp" ? "M" : "A"}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[15.5px] font-medium text-[#ECECEE]">
+                            {source.name}
+                          </div>
+                          <div className="truncate text-[13.5px] text-[#7A7A80]">
+                            {source.kind.toUpperCase()} · {source.source} ·{" "}
+                            {source.secretConfigured ? (
+                              <Trans>credential saved</Trans>
+                            ) : (
+                              <Trans>no auth</Trans>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="pill"
+                          size="sm"
+                          disabled={pending === source.id}
+                          onClick={() => void removeSource(source)}
+                        >
+                          {pending === source.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
+                        </Button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              </details>
             </div>
-          </details>
-        </div>
+          </>
         ) : null}
       </div>
     </div>

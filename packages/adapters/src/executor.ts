@@ -2126,7 +2126,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
         ) => {
           try {
             const result = await applyTool(name, args, executionId);
-            const failed = Boolean(result && typeof result === "object" && connectorFailures.has(result));
+            const failed = Boolean(
+              result && typeof result === "object" && connectorFailures.has(result),
+            );
             await recordToolStatus(
               name,
               executionId,
@@ -3054,7 +3056,9 @@ function summarizeToolOutcome(result: unknown, secrets: string[]): string | unde
       const text = record.content
         .filter(
           (part): part is { type: string; text?: string } =>
-            Boolean(part) && typeof part === "object" && (part as { type?: string }).type === "text",
+            Boolean(part) &&
+            typeof part === "object" &&
+            (part as { type?: string }).type === "text",
         )
         .map((part) => part.text ?? "")
         .join("\n")
@@ -3062,13 +3066,15 @@ function summarizeToolOutcome(result: unknown, secrets: string[]): string | unde
       if (text) return redactSecrets(text, secrets).slice(0, 4_000);
       if (
         record.content.some(
-          (part) => part && typeof part === "object" && (part as { type?: string }).type === "image",
+          (part) =>
+            part && typeof part === "object" && (part as { type?: string }).type === "image",
         )
       ) {
         return "Captured a screenshot";
       }
     }
-    if (typeof record.error === "string") return redactSecrets(record.error, secrets).slice(0, 4_000);
+    if (typeof record.error === "string")
+      return redactSecrets(record.error, secrets).slice(0, 4_000);
   }
   try {
     return redactSecrets(JSON.stringify(result), secrets).slice(0, 4_000);

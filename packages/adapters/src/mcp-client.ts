@@ -364,8 +364,15 @@ export function parseMcpConfig(
   return parseMcpConfigFromEnv(envVars);
 }
 
-export function parseMcpConfigFromEnv(envVars: Record<string, string | undefined>): McpClientConfig {
-  return { servers: [...serversFromConfigPath(envVars.MCP_CONFIG_PATH), ...serversFromEnvJson(envVars.MCP_SERVERS)] };
+export function parseMcpConfigFromEnv(
+  envVars: Record<string, string | undefined>,
+): McpClientConfig {
+  return {
+    servers: [
+      ...serversFromConfigPath(envVars.MCP_CONFIG_PATH),
+      ...serversFromEnvJson(envVars.MCP_SERVERS),
+    ],
+  };
 }
 
 async function parseMcpConfigAsync(

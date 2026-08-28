@@ -32,12 +32,12 @@ import {
   McpClient,
   McpConnector,
   McpOAuthBroker,
-  parseMcpConfig,
-  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PiOAuthLogins,
   PipedreamConnector,
   PostgresRealtimeFanout,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   pipedreamConfigFromEnv,
   pushTokenPath,
   type RemoteConnectorDependencies,
@@ -153,7 +153,7 @@ export async function createApp(
     MCP_SERVERS: env.mcpServers,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {

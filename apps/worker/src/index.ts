@@ -24,11 +24,11 @@ import {
   McpClient,
   McpConnector,
   McpOAuthBroker,
-  parseMcpConfig,
-  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PipedreamConnector,
   PostgresRealtimeFanout,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   pipedreamConfigFromEnv,
   resolveDeploymentModel,
   resolveSandboxProvider,
@@ -74,7 +74,7 @@ async function main() {
     MCP_SERVERS: process.env.MCP_SERVERS,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {

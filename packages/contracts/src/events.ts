@@ -154,7 +154,7 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     kind: z.literal("tool"),
     executionId: z.string(),
     name: z.string(),
-    args: z.record(z.string(), z.unknown()).optional(),
+    args: z.record(z.string(), z.any()).optional(),
     status: z.enum(["running", "completed", "failed"]).optional(),
     result: z.string().optional(),
   }),

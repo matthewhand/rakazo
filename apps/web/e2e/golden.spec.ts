@@ -268,7 +268,10 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
     timeout: 30_000,
   });
   await captureScreenshot(page, testInfo, "13b-tool-comms-pill");
-  await page.getByRole("main").getByRole("button", { name: /write_file/ }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: /write_file/ })
+    .click();
   await expect(page.getByRole("dialog", { name: /write_file/ })).toBeVisible();
   await captureScreenshot(page, testInfo, "13c-tool-comms-popup");
   await page.getByRole("button", { name: "Close" }).click();
@@ -282,7 +285,10 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
     timeout: 30_000,
   });
   await captureScreenshot(page, testInfo, "13d-helper-comms-pill");
-  await page.getByRole("main").getByRole("button", { name: /helper/i }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: /helper/i })
+    .click();
   await expect(page.getByRole("dialog", { name: /helper/i })).toBeVisible();
   await captureScreenshot(page, testInfo, "13e-helper-comms-popup");
   await page.getByRole("button", { name: "Close" }).click();
