@@ -1,7 +1,10 @@
+import { useLingui } from "@lingui/react/macro";
 import type { Bot, BotSection } from "@rakazo/contracts";
 import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
 
 export type ContextMenuPosition = { x: number; y: number };
+
+type ChatMenuTarget = Pick<Bot, "name" | "pinned" | "sectionId" | "unread">;
 
 export function BotContextMenu({
   bot,
@@ -18,7 +21,7 @@ export function BotContextMenu({
   onArchive,
   onDelete,
 }: {
-  bot: Bot;
+  bot: ChatMenuTarget;
   position: ContextMenuPosition;
   onClose: () => void;
   onTogglePinned: () => void;
@@ -32,6 +35,7 @@ export function BotContextMenu({
   onArchive: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useLingui();
   const firstItem = useRef<HTMLButtonElement>(null);
   const [sectionMenuOpen, setSectionMenuOpen] = useState(false);
 
@@ -60,7 +64,7 @@ export function BotContextMenu({
     <div className="fixed inset-0 z-40">
       <button
         type="button"
-        aria-label="Close bot menu"
+        aria-label={t`Close`}
         className="absolute inset-0 cursor-default"
         onClick={onClose}
         onContextMenu={(event) => {
@@ -70,40 +74,40 @@ export function BotContextMenu({
       />
       <div
         role="menu"
-        aria-label={`Actions for ${bot.name}`}
+        aria-label={t`Actions for ${bot.name}`}
         className="fixed w-[264px] rounded-[18px] border border-[#343438] bg-[#1A1A1D] p-2 shadow-[0_24px_60px_rgba(0,0,0,.62)]"
         style={{ left: safeLeft, top: safeTop }}
       >
         <MenuItem
           buttonRef={firstItem}
           icon={<PinIcon />}
-          label={bot.pinned ? "Unpin" : "Pin"}
+          label={bot.pinned ? t`Unpin` : t`Pin`}
           onSelect={onTogglePinned}
         />
         <MenuItem
           icon={<FolderIcon />}
           endIcon={<ChevronIcon />}
-          label="Move to"
+          label={t`Move to`}
           expanded={sectionMenuOpen}
           onSelect={() => setSectionMenuOpen((open) => !open)}
         />
         <MenuItem
           icon={<ReadStatusIcon unread={bot.unread} />}
-          label={bot.unread ? "Mark as Read" : "Mark as Unread"}
+          label={bot.unread ? t`Mark as Read` : t`Mark as Unread`}
           onSelect={onToggleUnread}
         />
         <div className="my-1 border-t border-[#343438]" />
-        <MenuItem icon={<EditIcon />} label="Edit Profile" onSelect={onEdit} />
-        <MenuItem icon={<DuplicateIcon />} label="Duplicate" onSelect={onDuplicate} />
+        <MenuItem icon={<EditIcon />} label={t`Edit Profile`} onSelect={onEdit} />
+        <MenuItem icon={<DuplicateIcon />} label={t`Duplicate`} onSelect={onDuplicate} />
         <div className="my-1 border-t border-[#343438]" />
-        <MenuItem icon={<ClearIcon />} label="Clear conversation" onSelect={onClear} />
-        <MenuItem icon={<ArchiveIcon />} label="Archive" onSelect={onArchive} />
-        <MenuItem icon={<TrashIcon />} label="Delete" tone="danger" onSelect={onDelete} />
+        <MenuItem icon={<ClearIcon />} label={t`Clear conversation`} onSelect={onClear} />
+        <MenuItem icon={<ArchiveIcon />} label={t`Archive`} onSelect={onArchive} />
+        <MenuItem icon={<TrashIcon />} label={t`Delete`} tone="danger" onSelect={onDelete} />
       </div>
       {sectionMenuOpen ? (
         <div
           role="menu"
-          aria-label={`Move ${bot.name} to section`}
+          aria-label={t`Move ${bot.name} to section`}
           className="fixed max-h-[min(420px,calc(100vh-16px))] w-[264px] overflow-y-auto rounded-[18px] border border-[#343438] bg-[#1A1A1D] p-2 shadow-[0_24px_60px_rgba(0,0,0,.62)]"
           style={{ left: Math.max(margin, sectionLeft), top: safeTop }}
         >
@@ -119,11 +123,11 @@ export function BotContextMenu({
           <MenuItem
             icon={<FolderIcon />}
             endIcon={bot.sectionId === null ? <CheckIcon /> : null}
-            label="Unassigned"
+            label={t`Unassigned`}
             onSelect={() => onMoveToSection(null)}
           />
           <div className="my-1 border-t border-[#343438]" />
-          <MenuItem icon={<NewFolderIcon />} label="New section" onSelect={onCreateSection} />
+          <MenuItem icon={<NewFolderIcon />} label={t`New section`} onSelect={onCreateSection} />
         </div>
       ) : null}
     </div>
@@ -153,14 +157,14 @@ function MenuItem({
       type="button"
       role="menuitem"
       aria-expanded={expanded}
-      className={`flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 text-left text-[15px] outline-none hover:bg-[#29292D] focus-visible:bg-[#29292D] ${
+      className={`flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 text-start text-[15px] outline-none hover:bg-[#29292D] focus-visible:bg-[#29292D] ${
         tone === "danger" ? "text-[#FF5364]" : "text-[#ECECEE]"
       }`}
       onClick={onSelect}
     >
       <span className="grid h-5 w-5 shrink-0 place-items-center">{icon}</span>
-      <span>{label}</span>
-      {endIcon ? <span className="ml-auto grid h-5 w-5 place-items-center">{endIcon}</span> : null}
+      <span dir="auto">{label}</span>
+      {endIcon ? <span className="ms-auto grid h-5 w-5 place-items-center">{endIcon}</span> : null}
     </button>
   );
 }

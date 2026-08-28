@@ -13,10 +13,11 @@ MCP servers provide tools that your Rakazo bots can use. Common examples include
 ## Configuration
 
 MCP servers can be configured via:
-1. **Web UI** (recommended) – Plugins overlay, MCP servers tab
-2. **Database** – Stored in the deployment settings (managed via UI or API)
-3. **Environment variable** (`MCP_SERVERS`) – JSON array of server configs
-4. **Config file** (`MCP_CONFIG_PATH`) – Path to a JSON config file
+1. **Web UI (registry)** – Plugins → Advanced → MCP servers (OAuth, per-bot assignment)
+2. **Web UI (native / env)** – Plugins → MCP servers tab (deployment-level list)
+3. **Database** – Stored in the deployment settings (managed via the native tab or API)
+4. **Environment variable** (`MCP_SERVERS`) – JSON array of server configs
+5. **Config file** (`MCP_CONFIG_PATH`) – Path to a JSON config file
 
 Configurations from all sources are merged. Database and UI configurations are loaded alongside environment and file-based settings.
 

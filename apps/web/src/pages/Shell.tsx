@@ -1,60 +1,96 @@
+import { t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type {
+  AgentSkillCatalogEntry,
   Bot,
   BotSection,
   ComputerMode,
+  ComputerReleaseReason,
   ComputerStatus,
+  Connection,
+  ConnectionCatalogItem,
+  Group,
   Me,
+  MessageBlock,
+  ModelCatalogEntry,
+  ModelCredential,
   ProductEvent,
   Routine,
   SearchHit,
   TaughtSkill,
+  ThinkingLevel,
   ThreadMessage,
   ThreadSnapshot,
   VoiceInfo,
   VoiceStatus,
+  WorkspaceMemoryConfig,
 } from "@rakazo/contracts";
 import {
   ATTACHMENT_ALLOWED_MIME_TYPES,
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
+  BOT_DESCRIPTION_MAX_LENGTH,
+  BOT_NAME_MAX_LENGTH,
+  BOT_TITLE_MAX_LENGTH,
+  normalizeCreateBotProfile,
 } from "@rakazo/contracts";
 import {
   abortableDelay,
-  attachmentsForBot,
+  attachmentsForThread,
+  buildComposerMentionOptions,
+  type ComposerMention,
   cronFromPreset,
-  defaultCronPreset,
-  formatCron,
   groupBotsForSidebar,
   inferAttachmentMimeType,
   isActive,
-  presetFromCron,
+  isRunTerminalEvent,
+  latestAnswerableAskMessageId,
+  mentionChipKey,
+  resolveComposerSendPlan,
+  SLASH_ACTIONS,
+  type SlashActionId,
+  searchHitThreadTarget,
+  serializeComposerPrompt,
   speechFromBlocks,
+  truncateSlashDescription,
 } from "@rakazo/core";
-import { BotAvatar, Button } from "@rakazo/ui-web";
 import {
+  AvatarStyleProvider,
+  BotAvatar,
+  Button,
+  GroupAvatar,
+  type GroupAvatarMember,
+} from "@rakazo/ui-web";
+import {
+  ArrowDown,
   ArrowUp,
-  ChevronLeft,
+  Bell,
+  Box,
+  ChevronDown,
+  Clock,
+  Copy,
   Cpu,
   Gauge,
   LogOut,
+  Menu,
   Mic,
   Monitor,
   Paperclip,
   Phone,
   Plus,
   Puzzle,
+  Reply,
   Settings,
   Square,
   Volume2,
   X,
 } from "lucide-react";
 import {
-  type Dispatch,
   lazy,
+  type MutableRefObject,
   memo,
   type RefObject,
-  type SetStateAction,
   Suspense,
   useCallback,
   useEffect,
@@ -64,90 +100,250 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ArtifactFileCard } from "../components/ArtifactFileCard";
+import { AskCard } from "../components/AskCard";
+import {
+  ActiveBotGlyph,
+  CollaborationMarker,
+} from "../components/beautiful-ui/CollaborationMarker";
+import { BuiButton, BuiCard, SuccessPop } from "../components/beautiful-ui/primitives";
+import { ComputerMaintenanceActions } from "../components/ComputerMaintenanceActions";
+import {
+  ComputersUnavailableHint,
+  computersAreUnavailable,
+} from "../components/ComputersUnavailableHint";
 import { SkillDraftCard } from "../components/teach/SkillDraftCard";
 import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
 import { TeachComputerSection } from "../components/teach/TeachComputerSection";
 import { TeachRecordingChrome, TeachStopButton } from "../components/teach/TeachRecordingChrome";
-import { decodeArtifactBase64, openArtifact } from "../lib/artifact-open";
+import { readActivityMode, writeActivityMode } from "../lib/activity-mode";
+import { type ArtifactTarget, decodeArtifactBase64 } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
+import { chartViewport } from "../lib/chart-viewport";
 import { dictation } from "../lib/dictation";
+import { localTimezone } from "../lib/local-timezone";
+import { connectMcpOauth } from "../lib/mcp-connect";
 import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { rpc } from "../lib/rpc";
 import { embeddableScreenUrl, screenIframeSandbox } from "../lib/screen-url";
 import {
+  activeThreadRuns,
+  clearActiveThreadRuns,
   computerPanelAutoBoot,
+  computerPanelAutoUsesBoot,
+  computerTakeoverBlocked,
   isComputerStatusEvent,
   isThreadSnapshotEvent,
-  mergeThreadSnapshot,
   prependThreadMessagePage,
+  reconcileRefreshedThread,
   reduceComputerStatus,
   reduceThreadSnapshot,
   userHoldsComputerControl,
 } from "../lib/thread-events";
+import {
+  transcriptCanSnapAfterFrame,
+  transcriptIsNearEnd,
+  transcriptMovedDown,
+} from "../lib/transcript-scroll";
 import { speaker } from "../lib/tts";
+import { ActivityList } from "./ActivityList";
 import type { ContextMenuPosition } from "./BotContextMenu";
-import { AgentCommsPill, isCommsBlock } from "../components/AgentComms";
+import { AgentCommsPill } from "../components/AgentComms";
+import { CreateGroupForm, GroupSettings, memberName } from "./GroupPanel";
 import { HostComputerPrompt } from "./HostComputerPrompt";
+import {
+  draftFromRoutine,
+  emptyRoutineDraft,
+  type RoutineDraftState,
+  RoutineEditor,
+  RoutineListHeader,
+  RoutineListRow,
+  routineNeedsOneShotArm,
+} from "./RoutineEditor";
 import { WindowChrome } from "./WindowChrome";
 import { WorkspaceSearchResults } from "./WorkspaceSearch";
 
 const BotContextMenu = lazy(() =>
   import("./BotContextMenu").then((module) => ({ default: module.BotContextMenu })),
 );
+const AccountSettingsOverlay = lazy(() =>
+  import("./AccountSettingsOverlay").then((module) => ({
+    default: module.AccountSettingsOverlay,
+  })),
+);
 const ModelSettingsOverlay = lazy(() =>
   import("./ModelSettingsOverlay").then((module) => ({ default: module.ModelSettingsOverlay })),
+);
+const PeerMessagesOverlay = lazy(() =>
+  import("./PeerMessagesOverlay").then((module) => ({ default: module.PeerMessagesOverlay })),
 );
 const PluginsOverlay = lazy(() =>
   import("./PluginsOverlay").then((module) => ({ default: module.PluginsOverlay })),
 );
-const RoutineSchedule = lazy(() =>
-  import("./RoutineSchedule").then((module) => ({ default: module.RoutineSchedule })),
+const McpServersOverlay = lazy(() =>
+  import("./McpServersOverlay").then((module) => ({ default: module.McpServersOverlay })),
+);
+const MemorySettingsOverlay = lazy(() =>
+  import("./MemorySettingsOverlay").then((module) => ({
+    default: module.MemorySettingsOverlay,
+  })),
 );
 const VoiceSettingsOverlay = lazy(() =>
   import("./VoiceSettingsOverlay").then((module) => ({ default: module.VoiceSettingsOverlay })),
 );
 const CallView = lazy(() => import("./CallView").then((module) => ({ default: module.CallView })));
+const ScratchpadSection = lazy(() =>
+  import("./ScratchpadSection").then((module) => ({ default: module.ScratchpadSection })),
+);
 
-type Panel = "computer" | "settings" | "routine" | "create" | null;
+type Panel =
+  | "computer"
+  | "settings"
+  | "routine"
+  | "create"
+  | "create-group"
+  | "group-settings"
+  | null;
 
 type PendingAttachment = {
   id: string;
-  botId: string;
+  threadKey: string;
   file: File;
   previewUrl?: string;
 };
 
 const ATTACHMENT_ACCEPT = ATTACHMENT_ALLOWED_MIME_TYPES.join(",");
 
+function collapsedSidebarSectionsStorageKey(userId: string | null | undefined): string | null {
+  if (!userId) return null;
+  return `rakazo:collapsed-sidebar-sections:${userId}`;
+}
+
+function readCollapsedSidebarSections(userId: string | null | undefined): Set<string> {
+  const storageKey = collapsedSidebarSectionsStorageKey(userId);
+  if (!storageKey) return new Set();
+  try {
+    const value = window.localStorage.getItem(storageKey);
+    const keys: unknown = value ? JSON.parse(value) : [];
+    return new Set(
+      Array.isArray(keys) ? keys.filter((key): key is string => typeof key === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export function ShellPage() {
-  const { botId } = useParams();
+  const { t } = useLingui();
+  const { botId, groupId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Mirrors searchParams for effects that only need to read it once on run,
+  // not re-run on every unrelated query-param change (e.g. the SSE subscribe
+  // effect below, which should only restart when the active bot changes).
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
   const session = authClient.useSession();
+  const userId = session.data?.user.id;
+  const [groups, setGroups] = useState<Group[]>([]);
   const [bots, setBots] = useState<Bot[]>([]);
   const [botSections, setBotSections] = useState<BotSection[]>([]);
   const [archivedBots, setArchivedBots] = useState<Bot[]>([]);
+  const [archivedGroups, setArchivedGroups] = useState<Group[]>([]);
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [collapsedSidebarSections, setCollapsedSidebarSections] = useState(() => new Set<string>());
+
+  useEffect(() => {
+    setCollapsedSidebarSections(readCollapsedSidebarSections(userId));
+  }, [userId]);
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
+  const snapshotRef = useRef<ThreadSnapshot | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [replyTarget, setReplyTarget] = useState<ThreadMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [panel, setPanel] = useState<Panel>(null);
+  const [peerMessagesOpen, setPeerMessagesOpen] = useState(false);
+  const [peerMessagesFocusId, setPeerMessagesFocusId] = useState<string | null>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [routinesBotId, setRoutinesBotId] = useState<string | null>(null);
   const [taughtSkills, setTaughtSkills] = useState<TaughtSkill[]>([]);
   const [taughtSkillsBotId, setTaughtSkillsBotId] = useState<string | null>(null);
+  const [agentSkills, setAgentSkills] = useState<AgentSkillCatalogEntry[]>([]);
+  const [mentionRoutines, setMentionRoutines] = useState<Array<Routine & { botName?: string }>>([]);
+  const [mentionConnectors, setMentionConnectors] = useState<
+    Array<{
+      id: string;
+      name: string;
+      authStatus: "connected" | "needs_auth";
+      connectionId?: string;
+    }>
+  >([]);
   const [teachBusy, setTeachBusy] = useState(false);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
+  const computerRef = useRef<ComputerStatus | null>(null);
+  const threadRefreshEpoch = useRef(0);
+  const groupRefreshEpoch = useRef(0);
+  const botsRefreshEpoch = useRef(0);
+  const botsRefreshApplied = useRef(0);
+  const archivedBotsRefreshEpoch = useRef(0);
+  const botsRefreshInFlight = useRef(0);
+  // Last-known computer/screen per bot, so switching back to an already-seen
+  // bot paints its computer pane instantly instead of blanking it while the
+  // thread + screen RPCs round-trip again (see refreshThread / refreshComputerScreen).
+  const computerCacheRef = useRef(
+    new Map<string, { computer: ComputerStatus | null; screenUrl: string | null }>(),
+  );
+  // Caps computerCacheRef so a long session that opens many distinct bots
+  // over time doesn't accumulate one entry per bot forever. Re-inserting on
+  // every update keeps Map iteration order as least-recently-used first, so
+  // eviction drops the bot that's been out of view longest.
+  const COMPUTER_CACHE_LIMIT = 20;
+
+  function cacheComputerFor(
+    botId: string,
+    patch: Partial<{ computer: ComputerStatus | null; screenUrl: string | null }>,
+  ) {
+    const cache = computerCacheRef.current;
+    const prev = cache.get(botId) ?? { computer: null, screenUrl: null };
+    cache.delete(botId);
+    cache.set(botId, { ...prev, ...patch });
+    if (cache.size > COMPUTER_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+  }
+
+  function commitSnapshot(next: ThreadSnapshot | null) {
+    snapshotRef.current = next;
+    setSnapshot(next);
+  }
+
+  function commitComputer(next: ComputerStatus | null) {
+    computerRef.current = next;
+    setComputer(next);
+  }
+
+  function updateSnapshot(update: (prev: ThreadSnapshot | null) => ThreadSnapshot | null) {
+    commitSnapshot(update(snapshotRef.current));
+  }
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [accountSettingsFocusUsage, setAccountSettingsFocusUsage] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
+  const [memoryProviderConfig, setMemoryProviderConfig] = useState<
+    WorkspaceMemoryConfig | null | undefined
+  >(undefined);
+  const memoryProviderConfigRevision = useRef(0);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
@@ -155,28 +351,43 @@ export function ShellPage() {
   const [dictating, setDictating] = useState(false);
   const [dictationError, setDictationError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [activityMode, setActivityMode] = useState(readActivityMode);
+  const toggleActivityMode = useCallback(() => {
+    setActivityMode((on) => {
+      const next = !on;
+      writeActivityMode(next);
+      return next;
+    });
+  }, []);
   const [botMenu, setBotMenu] = useState<{
-    botId: string;
+    kind: "bot" | "group";
+    id: string;
     position: ContextMenuPosition;
   } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Bot | null>(null);
-  const [clearTarget, setClearTarget] = useState<Bot | null>(null);
-  const [newSectionBot, setNewSectionBot] = useState<Bot | null>(null);
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
+  const [clearTarget, setClearTarget] = useState<
+    { kind: "bot"; chat: Bot } | { kind: "group"; chat: Group } | null
+  >(null);
+  const [newSectionTarget, setNewSectionTarget] = useState<
+    { kind: "bot"; chat: Bot } | { kind: "group"; chat: Group } | null
+  >(null);
   const [booting, setBooting] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [initialBotsLoaded, setInitialBotsLoaded] = useState(false);
   const [bootstrapMe, setBootstrapMe] = useState<Me | null>();
-  const [routineDraft, setRoutineDraft] = useState({
-    name: "",
-    prompt: "",
-    schedule: defaultCronPreset(),
-  });
+  const [routineDraft, setRoutineDraft] = useState<RoutineDraftState>(emptyRoutineDraft());
+  const [routineWebhookSecret, setRoutineWebhookSecret] = useState<string | null>(null);
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [deleteRoutineTarget, setDeleteRoutineTarget] = useState<Routine | null>(null);
   const [savingRoutine, setSavingRoutine] = useState(false);
   const [runningRoutine, setRunningRoutine] = useState(false);
+  const [routineError, setRoutineError] = useState<string | null>(null);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
   const [computerOpen, setComputerOpen] = useState(false);
+  const [computerError, setComputerError] = useState<string | null>(null);
   const [usage, setUsage] = useState<{
     inputTokens: number;
     outputTokens: number;
@@ -184,39 +395,53 @@ export function ShellPage() {
   } | null>(null);
   const autoBooted = useRef<string | null>(null);
   const routineSavePending = useRef(false);
+  const routineSaveRequest = useRef(0);
   const routineRunPending = useRef(false);
   const bootstrappedThread = useRef<ThreadSnapshot | null>(null);
   const expandedHistoryThread = useRef<string | null>(null);
   const historyEpoch = useRef(0);
+  const jumpGeneration = useRef(0);
   const initiallyScrolledThread = useRef<string | null>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
   const pinnedAroundRef = useRef<{
-    botId: string;
+    botId?: string;
+    groupId?: string;
     messageId: string;
     threadId: string;
     messages: ThreadMessage[];
     olderCursor: number | null;
   } | null>(null);
   const manuallyUnread = useRef(new Set<string>());
+  const readVisibleGroups = useRef(new Set<string>());
   const computerVisible = useRef(false);
   computerVisible.current = panel === "computer" || computerOpen;
   const autoSpoken = useRef<string | null>(null);
   const autoSpokenBotId = useRef<string | null>(null);
 
-  const active = bots.find((b) => b.id === botId) ?? bots[0];
+  const inGroup = Boolean(groupId);
+  const active = inGroup ? undefined : (bots.find((b) => b.id === botId) ?? bots[0]);
+  const activeGroup = groups.find((group) => group.id === groupId);
   const activePendingAttachments = useMemo(
-    () => attachmentsForBot(pendingAttachments, active?.id),
-    [active?.id, pendingAttachments],
+    () => attachmentsForThread(pendingAttachments, inGroup ? groupId : active?.id),
+    [active?.id, groupId, inGroup, pendingAttachments],
   );
-  const activeRoutines = routinesBotId === active?.id ? routines : [];
+  const activeRoutines = !inGroup && routinesBotId === active?.id ? routines : [];
   const activeTaughtSkills = taughtSkillsBotId === active?.id ? taughtSkills : [];
   const recordingSkill = activeTaughtSkills.find((skill) => skill.status === "recording") ?? null;
   const routeBotId = useRef<string | undefined>(botId);
   routeBotId.current = botId;
-  const activeBotId = useRef<string | undefined>(active?.id);
-  activeBotId.current = active?.id;
+  const routeGroupId = useRef<string | undefined>(groupId);
+  routeGroupId.current = groupId;
+  const activeBotId = useRef<string | undefined>(inGroup ? undefined : active?.id);
+  activeBotId.current = inGroup ? undefined : active?.id;
+  const activeGroupId = useRef<string | undefined>(groupId);
+  activeGroupId.current = groupId;
   const screenRequest = useRef(0);
-  const contextBot = botMenu ? bots.find((bot) => bot.id === botMenu.botId) : undefined;
+  const contextBot =
+    botMenu?.kind === "bot" ? bots.find((bot) => bot.id === botMenu.id) : undefined;
+  const contextGroup =
+    botMenu?.kind === "group" ? groups.find((group) => group.id === botMenu.id) : undefined;
+  const contextChat = contextBot ?? contextGroup;
   const closeBotMenu = useCallback(() => setBotMenu(null), []);
   const updateBotUnread = useCallback((id: string, unread: boolean) => {
     setBots((current) => {
@@ -260,69 +485,154 @@ export function ShellPage() {
     [markBotRead],
   );
 
-  async function refreshBots(includeArchived = false) {
-    markOnce("rk:renderer:bots-request-start");
-    const [list, sections, archived] = await Promise.all([
-      rpc.bots.list(),
-      rpc.botSections.list(),
-      includeArchived ? rpc.bots.listArchived() : Promise.resolve(null),
-    ]);
-    markOnce("rk:renderer:bots-response");
-    setBots(list);
-    setBotSections(sections);
-    setInitialBotsLoaded(true);
-    if (archived) setArchivedBots(archived);
-    if (includeArchived && list.length === 0 && archived?.length === 0) {
-      navigate("/onboarding", { replace: true });
-      return;
+  const refreshBots = useCallback(
+    async (includeArchived = false) => {
+      markOnce("rk:renderer:bots-request-start");
+      const request = ++botsRefreshEpoch.current;
+      const archivedRequest = includeArchived ? ++archivedBotsRefreshEpoch.current : null;
+      botsRefreshInFlight.current += 1;
+      try {
+        const [list, sections, archived, groupList, archivedGroupList] = await Promise.all([
+          rpc.bots.list(),
+          rpc.botSections.list(),
+          includeArchived ? rpc.bots.listArchived() : Promise.resolve(null),
+          rpc.groups.list(),
+          includeArchived ? rpc.groups.listArchived() : Promise.resolve(null),
+        ]);
+        markOnce("rk:renderer:bots-response");
+        const botsFresh = request === botsRefreshEpoch.current;
+        const archivedFresh =
+          archivedRequest != null && archivedRequest === archivedBotsRefreshEpoch.current;
+        // A newer non-archived refresh can win the bots epoch while an older
+        // includeArchived request still owns archivedBotsRefreshEpoch — apply
+        // whichever slices are still current.
+        if (!botsFresh && !archivedFresh) return;
+        if (archivedFresh && archived) setArchivedBots(archived);
+        if (archivedFresh && archivedGroupList) setArchivedGroups(archivedGroupList);
+        if (!botsFresh) return;
+        setBots(list);
+        setBotSections(sections);
+        setGroups(groupList);
+        setInitialBotsLoaded(true);
+        botsRefreshApplied.current = request;
+        if (
+          includeArchived &&
+          list.length === 0 &&
+          archived?.length === 0 &&
+          groupList.length === 0 &&
+          archivedGroupList?.length === 0
+        ) {
+          navigate("/onboarding", { replace: true });
+          return;
+        }
+        const currentGroupId = routeGroupId.current;
+        if (currentGroupId) {
+          if (!groupList.some((group) => group.id === currentGroupId)) {
+            navigate(firstThreadRoute(list, groupList), { replace: true });
+          }
+          return;
+        }
+        const currentBotId = routeBotId.current;
+        if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
+          navigate(firstThreadRoute(list, groupList), { replace: true });
+        }
+      } finally {
+        botsRefreshInFlight.current -= 1;
+      }
+    },
+    [navigate],
+  );
+
+  function snapTranscriptToEndAfterFrame() {
+    const queuedElement = messageScroll.current;
+    if (!queuedElement) return;
+    const queuedScrollTop = queuedElement.scrollTop;
+    window.requestAnimationFrame(() => {
+      const element = messageScroll.current;
+      if (transcriptCanSnapAfterFrame(element, queuedElement, queuedScrollTop)) {
+        queuedElement.scrollTop = queuedElement.scrollHeight;
+      }
+    });
+  }
+
+  async function refreshGroupThread(id: string) {
+    const scrollElement = messageScroll.current;
+    const stickToEnd = !scrollElement || transcriptIsNearEnd(scrollElement);
+    markOnce("rk:renderer:thread-request-start");
+    const request = ++groupRefreshEpoch.current;
+    const snap = await rpc.threads.get({ groupId: id });
+    markOnce("rk:renderer:thread-response");
+    if (activeGroupId.current !== id || request !== groupRefreshEpoch.current) return snap;
+    const reconciled = reconcileRefreshedThread(
+      snapshotRef.current,
+      snap,
+      computerRef.current,
+      expandedHistoryThread.current === snap.threadId,
+    );
+    commitSnapshot(reconciled.snapshot);
+    commitComputer(null);
+    setRoutines([]);
+    setRoutinesBotId(null);
+    // Keep the search-jump viewport; expandedHistoryThread merge still accepts live messages.
+    if (
+      stickToEnd &&
+      (!scrollElement || transcriptIsNearEnd(scrollElement)) &&
+      expandedHistoryThread.current !== snap.threadId
+    ) {
+      snapTranscriptToEndAfterFrame();
     }
-    const currentBotId = routeBotId.current;
-    if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
-      navigate(list[0] ? `/app/${list[0].id}` : "/app", { replace: true });
-    }
+    return snap;
   }
 
   async function refreshThread(id: string) {
     const scrollElement = messageScroll.current;
-    const stickToEnd =
-      !scrollElement ||
-      scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80;
+    const stickToEnd = !scrollElement || transcriptIsNearEnd(scrollElement);
     markOnce("rk:renderer:thread-request-start");
-    const pin = pinnedAroundRef.current;
-    const keepPin = pin?.botId === id;
     const epoch = historyEpoch.current;
-    const [snap, routines, skills] = await Promise.all([
-      rpc.threads.get({ botId: id }),
+    const request = ++threadRefreshEpoch.current;
+    // Apply threads.get as soon as it returns so stop/takeover status is not held behind
+    // routines/skills/screen fetches (progress can advance the cursor meanwhile).
+    const snap = await rpc.threads.get({ botId: id });
+    markOnce("rk:renderer:thread-response");
+    if (
+      activeBotId.current !== id ||
+      epoch !== historyEpoch.current ||
+      request !== threadRefreshEpoch.current
+    ) {
+      return snap;
+    }
+    const reconciled = reconcileRefreshedThread(
+      snapshotRef.current,
+      snap,
+      computerRef.current,
+      expandedHistoryThread.current === snap.threadId,
+    );
+    commitSnapshot(reconciled.snapshot);
+    commitComputer(reconciled.computer);
+    cacheComputerFor(id, { computer: reconciled.computer });
+    if (
+      stickToEnd &&
+      (!scrollElement || transcriptIsNearEnd(scrollElement)) &&
+      expandedHistoryThread.current !== snap.threadId
+    ) {
+      snapTranscriptToEndAfterFrame();
+    }
+    const [routines, skills] = await Promise.all([
       rpc.routines.list({ botId: id }),
       rpc.skills.list({ botId: id }),
       refreshComputerScreen(id),
     ]);
-    markOnce("rk:renderer:thread-response");
-    // The epoch check drops a response that raced a conversation clear, which would otherwise
-    // re-apply the deleted messages and cursor over the emptied snapshot.
-    if (activeBotId.current !== id || epoch !== historyEpoch.current) return snap;
-    setSnapshot((prev) => {
-      let merged = mergeThreadSnapshot(prev, snap, expandedHistoryThread.current === snap.threadId);
-      if (keepPin && merged) {
-        merged = {
-          ...merged,
-          messages: pin.messages,
-          olderCursor: pin.olderCursor,
-        };
-      }
-      return merged;
-    });
-    setComputer(snap.computer);
+    if (
+      activeBotId.current !== id ||
+      epoch !== historyEpoch.current ||
+      request !== threadRefreshEpoch.current
+    ) {
+      return snap;
+    }
     setRoutines(routines);
     setRoutinesBotId(id);
     setTaughtSkills(skills);
     setTaughtSkillsBotId(id);
-    if (!keepPin && stickToEnd) {
-      window.requestAnimationFrame(() => {
-        const element = messageScroll.current;
-        if (element) element.scrollTop = element.scrollHeight;
-      });
-    }
     return snap;
   }
 
@@ -338,24 +648,42 @@ export function ShellPage() {
       return null;
     }
     setScreenUrl(screen.url);
+    cacheComputerFor(id, { screenUrl: screen.url });
     return screen.url;
   }
 
   async function loadOlderMessages() {
-    if (!active || snapshot?.olderCursor == null || loadingOlder) return;
+    const targetBotId = inGroup ? undefined : active?.id;
+    const targetGroupId = inGroup ? groupId : undefined;
+    const snapshotMatchesTarget = targetGroupId
+      ? snapshot?.groupId === targetGroupId
+      : snapshot?.botId === targetBotId;
+    if (
+      (!targetBotId && !targetGroupId) ||
+      !snapshotMatchesTarget ||
+      snapshot?.olderCursor == null ||
+      loadingOlder
+    )
+      return;
     pinnedAroundRef.current = null;
     const scrollElement = messageScroll.current;
     const previousHeight = scrollElement?.scrollHeight ?? 0;
     const epoch = historyEpoch.current;
+    const before = snapshot.olderCursor;
     setLoadingOlder(true);
     try {
       const page = await rpc.threads.messages({
-        botId: active.id,
-        before: snapshot.olderCursor,
+        ...(targetGroupId ? { groupId: targetGroupId } : { botId: targetBotId! }),
+        before,
       });
-      if (epoch !== historyEpoch.current) return;
+      if (
+        epoch !== historyEpoch.current ||
+        activeBotId.current !== targetBotId ||
+        activeGroupId.current !== targetGroupId
+      )
+        return;
       expandedHistoryThread.current = page.threadId;
-      setSnapshot((prev) => prependThreadMessagePage(prev, page));
+      updateSnapshot((prev) => prependThreadMessagePage(prev, page));
       window.requestAnimationFrame(() => {
         const element = messageScroll.current;
         if (element) element.scrollTop += element.scrollHeight - previousHeight;
@@ -367,25 +695,58 @@ export function ShellPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void takeInitialBootstrap(botId)
-      .then((bootstrap) => {
+    const providerConfigRevision = memoryProviderConfigRevision.current;
+    void rpc.memory
+      .providerConfig()
+      .then((providerConfig) => {
+        if (!cancelled && memoryProviderConfigRevision.current === providerConfigRevision) {
+          setMemoryProviderConfig(providerConfig);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && memoryProviderConfigRevision.current === providerConfigRevision) {
+          setMemoryProviderConfig(null);
+        }
+      });
+    const appliedAtStart = botsRefreshApplied.current;
+    void Promise.all([takeInitialBootstrap(botId), rpc.groups.list()])
+      .then(([bootstrap, groupList]) => {
         if (cancelled) return;
         setBootstrapMe(bootstrap.me);
-        setBots(bootstrap.bots);
-        setBotSections(bootstrap.botSections);
-        setArchivedBots(bootstrap.archivedBots);
-        setInitialBotsLoaded(true);
-        if (bootstrap.thread) {
+        // Skip list/route writes only if a later refreshBots() successfully
+        // committed (failed refreshes bump epoch but not botsRefreshApplied).
+        const applyBotLists = appliedAtStart === botsRefreshApplied.current;
+        if (applyBotLists) {
+          setBots(bootstrap.bots);
+          setBotSections(bootstrap.botSections);
+          setArchivedBots(bootstrap.archivedBots);
+          setArchivedGroups(bootstrap.archivedGroups);
+          setGroups(groupList);
+          setInitialBotsLoaded(true);
+        }
+        if (!groupId && bootstrap.thread) {
           bootstrappedThread.current = bootstrap.thread;
-          setSnapshot(bootstrap.thread);
-          setComputer(bootstrap.thread.computer);
+          commitSnapshot(bootstrap.thread);
+          commitComputer(bootstrap.thread.computer ?? null);
           setRoutines(bootstrap.routines);
-          setRoutinesBotId(bootstrap.thread.botId);
+          setRoutinesBotId(bootstrap.thread.botId ?? null);
           markOnce("rk:renderer:bots-response");
           markOnce("rk:renderer:thread-response");
         }
-        if (bootstrap.bots.length === 0 && bootstrap.archivedBots.length === 0) {
+        if (!applyBotLists) return;
+        if (
+          bootstrap.bots.length === 0 &&
+          bootstrap.archivedBots.length === 0 &&
+          groupList.length === 0 &&
+          bootstrap.archivedGroups.length === 0
+        ) {
           navigate("/onboarding", { replace: true });
+          return;
+        }
+        if (groupId) {
+          if (!groupList.some((group) => group.id === groupId)) {
+            navigate(firstThreadRoute(bootstrap.bots, groupList), { replace: true });
+          }
           return;
         }
         const selectedBotId = bootstrap.thread?.botId ?? bootstrap.bots[0]?.id;
@@ -406,7 +767,12 @@ export function ShellPage() {
     };
     window.addEventListener("focus", refreshVisibleBots);
     document.addEventListener("visibilitychange", refreshVisibleBots);
-    const poll = window.setInterval(refreshVisibleBots, 60_000);
+    // Poll skips while a refresh is in flight; focus/visibility and event-driven
+    // callers still bump botsRefreshEpoch so only the latest response applies.
+    const poll = window.setInterval(() => {
+      if (botsRefreshInFlight.current > 0) return;
+      refreshVisibleBots();
+    }, 3_000);
     return () => {
       cancelled = true;
       window.clearTimeout(refreshTimer);
@@ -414,6 +780,28 @@ export function ShellPage() {
       window.removeEventListener("focus", refreshVisibleBots);
       document.removeEventListener("visibilitychange", refreshVisibleBots);
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void rpc.agentSkills
+      .list()
+      .then((skills) => {
+        if (!cancelled) setAgentSkills(skills);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshAgentSkills = useCallback(() => {
+    void rpc.agentSkills
+      .list()
+      .then(setAgentSkills)
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -480,19 +868,33 @@ export function ShellPage() {
 
   useEffect(() => {
     if (!active) return;
-    if (!searchParams.get("m")) {
+    const pendingJump = searchParamsRef.current.get("m");
+    if (!pendingJump) {
       pinnedAroundRef.current = null;
     }
     screenRequest.current += 1;
-    setScreenUrl(null);
+    const cached = computerCacheRef.current.get(active.id);
+    if (cached) {
+      // Paint the last-known computer instantly; refreshThread/refreshComputerScreen
+      // below still run and reconcile with fresh data in the background.
+      setScreenUrl(cached.screenUrl);
+      commitComputer(cached.computer);
+    } else {
+      setScreenUrl(null);
+    }
     expandedHistoryThread.current = null;
     historyEpoch.current += 1;
     const abort = new AbortController();
     void (async () => {
       const primed = bootstrappedThread.current;
       bootstrappedThread.current = null;
+      // Pending search jumps load the around-page separately; avoid replacing it with latest.
       const snap =
-        primed?.botId === active.id ? primed : await refreshThread(active.id).catch(() => null);
+        primed?.botId === active.id
+          ? primed
+          : pendingJump
+            ? await rpc.threads.get({ botId: active.id }).catch(() => null)
+            : await refreshThread(active.id).catch(() => null);
       if (abort.signal.aborted) return;
       let cursor = snap?.cursor ?? -1;
       let retryMs = 250;
@@ -506,7 +908,7 @@ export function ShellPage() {
             if (abort.signal.aborted) break;
             cursor = Math.max(cursor, event.seq);
             retryMs = 250;
-            applyThreadEvent(event, setSnapshot, setComputer);
+            applyThreadEvent(event, commitSnapshot, commitComputer, snapshotRef, computerRef);
             if (event.type === "thread.cleared") {
               expandedHistoryThread.current = null;
               pinnedAroundRef.current = null;
@@ -517,7 +919,8 @@ export function ShellPage() {
             } else if (
               event.type === "bot.spawned" ||
               event.type === "bot.deleted" ||
-              event.type === "run.completed" ||
+              event.type === "run.started" ||
+              isRunTerminalEvent(event) ||
               event.type === "thread.cleared"
             ) {
               void refreshBots().catch(() => undefined);
@@ -530,11 +933,11 @@ export function ShellPage() {
               if (event.payload.role === "bot") markBotReadIfVisible(active.id);
             }
             if (
-              event.type === "run.completed" ||
-              event.type === "run.failed" ||
-              event.type === "run.cancelled" ||
+              isRunTerminalEvent(event) ||
+              event.type === "run.waiting_input" ||
               event.type === "skill.teaching.stopped"
             ) {
+              // waiting_input: reconcile ask cards if a stale post-send refresh raced SSE.
               void refreshThread(active.id).catch(() => undefined);
             } else if (isComputerStatusEvent(event)) {
               void refreshComputerScreen(active.id).catch(() => undefined);
@@ -552,15 +955,129 @@ export function ShellPage() {
     return () => {
       abort.abort();
     };
-  }, [active?.id, markBotReadIfVisible, searchParams]);
+  }, [active?.id, markBotReadIfVisible]);
+
+  useEffect(() => {
+    if (!groupId || !activeGroup) return;
+    manuallyUnread.current.delete(activeGroup.id);
+    readVisibleGroups.current.delete(groupId);
+    const markVisibleGroupRead = () => {
+      if (
+        document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
+        readVisibleGroups.current.has(groupId)
+      )
+        return;
+      readVisibleGroups.current.add(groupId);
+      void rpc.threads
+        .markRead({ groupId })
+        .then(() => {
+          setGroups((current) => {
+            const group = current.find((candidate) => candidate.id === groupId);
+            if (!group?.unread) return current;
+            return current.map((candidate) =>
+              candidate.id === groupId ? { ...candidate, unread: false } : candidate,
+            );
+          });
+        })
+        .catch(() => {
+          readVisibleGroups.current.delete(groupId);
+        });
+    };
+    markVisibleGroupRead();
+    window.addEventListener("focus", markVisibleGroupRead);
+    document.addEventListener("visibilitychange", markVisibleGroupRead);
+    const pendingJump = searchParamsRef.current.get("m");
+    if (!pendingJump) {
+      pinnedAroundRef.current = null;
+      expandedHistoryThread.current = null;
+    }
+    historyEpoch.current += 1;
+    const abort = new AbortController();
+    void (async () => {
+      const snap = pendingJump
+        ? await rpc.threads.get({ groupId }).catch(() => null)
+        : await refreshGroupThread(groupId).catch(() => null);
+      if (abort.signal.aborted) return;
+      let cursor = snap?.cursor ?? -1;
+      let retryMs = 250;
+      while (!abort.signal.aborted) {
+        try {
+          const events = await rpc.threads.subscribe({ groupId, cursor }, { signal: abort.signal });
+          for await (const event of events) {
+            if (abort.signal.aborted) break;
+            cursor = Math.max(cursor, event.seq);
+            retryMs = 250;
+            applyThreadEvent(event, commitSnapshot, commitComputer, snapshotRef, computerRef);
+            if (event.type === "thread.message.created" && event.payload.role === "bot") {
+              readVisibleGroups.current.delete(groupId);
+              markVisibleGroupRead();
+            }
+            if (event.type === "run.started" || isRunTerminalEvent(event)) {
+              void refreshBots().catch(() => undefined);
+            }
+            if (isRunTerminalEvent(event) || event.type === "run.waiting_input") {
+              // waiting_input: reconcile ask cards if a stale post-send refresh raced SSE.
+              void refreshGroupThread(groupId).catch(() => undefined);
+            }
+          }
+        } catch {
+          // reconnect safely
+        }
+        if (abort.signal.aborted) break;
+        await refreshGroupThread(groupId).catch(() => null);
+        await abortableDelay(retryMs, abort.signal);
+        retryMs = Math.min(retryMs * 2, 5_000);
+      }
+    })();
+    return () => {
+      window.removeEventListener("focus", markVisibleGroupRead);
+      document.removeEventListener("visibilitychange", markVisibleGroupRead);
+      abort.abort();
+    };
+  }, [activeGroup?.id, groupId]);
 
   const filtered = useMemo(
-    () => bots.filter((b) => `${b.name} ${b.preview}`.toLowerCase().includes(query.toLowerCase())),
+    () =>
+      bots.filter((b) =>
+        `${b.name} ${b.title ?? ""} ${b.preview ?? ""}`.toLowerCase().includes(query.toLowerCase()),
+      ),
     [bots, query],
   );
+  const filteredGroups = useMemo(
+    () =>
+      groups.filter((g) => `${g.name} ${g.preview}`.toLowerCase().includes(query.toLowerCase())),
+    [groups, query],
+  );
   const sidebarGroups = useMemo(
-    () => groupBotsForSidebar(filtered, botSections),
-    [botSections, filtered],
+    () =>
+      groupBotsForSidebar(
+        [
+          ...filtered.map((chat) => ({ kind: "bot" as const, chat })),
+          ...filteredGroups.map((chat) => ({ kind: "group" as const, chat })),
+        ].map((item) => ({ ...item, pinned: item.chat.pinned, sectionId: item.chat.sectionId })),
+        botSections,
+      ),
+    [botSections, filtered, filteredGroups],
+  );
+  const toggleSidebarSection = useCallback(
+    (key: string) => {
+      setCollapsedSidebarSections((previous) => {
+        const next = new Set(previous);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        const storageKey = collapsedSidebarSectionsStorageKey(userId);
+        if (storageKey) {
+          try {
+            window.localStorage.setItem(storageKey, JSON.stringify([...next]));
+          } catch {
+            // Keep the UI usable when storage is unavailable.
+          }
+        }
+        return next;
+      });
+    },
+    [userId],
   );
   const workspaceQuery = query.trim();
   const showWorkspaceSearch = workspaceQuery.length > 0;
@@ -599,55 +1116,84 @@ export function ShellPage() {
     if (hit.messageId) params.set("m", hit.messageId);
     if (hit.routineId) params.set("routine", hit.routineId);
     navigate({
-      pathname: `/app/${hit.botId}`,
+      pathname: hit.groupId ? `/app/g/${hit.groupId}` : `/app/${hit.botId}`,
       search: params.toString() ? `?${params.toString()}` : undefined,
     });
   }
 
-  async function jumpToMessage(botId: string, messageId: string) {
+  async function jumpToMessage(target: { botId?: string; groupId?: string; messageId: string }) {
+    const threadTarget = searchHitThreadTarget(target);
     const epoch = historyEpoch.current;
+    jumpGeneration.current += 1;
+    const jumpId = jumpGeneration.current;
     const [snap, page] = await Promise.all([
-      rpc.threads.get({ botId }),
-      rpc.threads.messages({ botId, around: { messageId } }),
+      rpc.threads.get(threadTarget),
+      rpc.threads.messages({ ...threadTarget, around: { messageId: target.messageId } }),
     ]);
     // The epoch check drops a jump that raced a conversation clear (or a bot switch): applying
     // the fetched page would pin deleted messages that every later refresh keeps restoring.
-    if (epoch !== historyEpoch.current) return;
+    // jumpId drops an older jump that finished after a newer click.
+    if (epoch !== historyEpoch.current || jumpId !== jumpGeneration.current) return;
+    if (target.groupId && activeGroupId.current !== target.groupId) return;
+    if (target.botId && activeBotId.current !== target.botId) return;
     expandedHistoryThread.current = page.threadId;
     pinnedAroundRef.current = {
-      botId,
-      messageId,
+      ...threadTarget,
+      messageId: target.messageId,
       threadId: page.threadId,
       messages: page.messages,
       olderCursor: page.olderCursor,
     };
-    setSnapshot({
+    initiallyScrolledThread.current = page.threadId;
+    commitSnapshot({
       ...snap,
       messages: page.messages,
       olderCursor: page.olderCursor,
     });
-    setComputer(snap.computer);
-    setRoutines(await rpc.routines.list({ botId }));
-    setRoutinesBotId(botId);
+    if (threadTarget.botId) {
+      commitComputer(snap.computer ?? null);
+      // Don't block parent-scroll on routines metadata; a list failure must not abort the jump.
+      void rpc.routines
+        .list({ botId: threadTarget.botId })
+        .then((routines) => {
+          if (epoch !== historyEpoch.current || jumpId !== jumpGeneration.current) return;
+          if (activeBotId.current !== threadTarget.botId) return;
+          setRoutines(routines);
+          setRoutinesBotId(threadTarget.botId);
+        })
+        .catch(() => undefined);
+    } else {
+      commitComputer(null);
+      setRoutines([]);
+      setRoutinesBotId(null);
+    }
     window.requestAnimationFrame(() => {
+      if (epoch !== historyEpoch.current || jumpId !== jumpGeneration.current) return;
       document
-        .querySelector(`[data-message-id="${messageId}"]`)
+        .querySelector(`[data-message-id="${target.messageId}"]`)
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }
 
   useEffect(() => {
-    if (!active) return;
     const messageId = searchParams.get("m");
     const routineId = searchParams.get("routine");
+    if (inGroup && groupId && messageId) {
+      void jumpToMessage({ groupId, messageId }).finally(() => {
+        // Keep expandedHistoryThread; only strip the jump URL so refresh does not remount.
+        const next = new URLSearchParams(searchParams);
+        next.delete("m");
+        setSearchParams(next, { replace: true });
+      });
+      return;
+    }
+    if (!active) return;
     if (routineId && routinesBotId === active.id) {
       const routine = routines.find((item) => item.id === routineId);
       if (routine) {
-        setRoutineDraft({
-          name: routine.name,
-          prompt: routine.prompt,
-          schedule: presetFromCron(routine.cron),
-        });
+        setRoutineDraft(draftFromRoutine(routine));
+        setRoutineWebhookSecret(null);
+        setEditingRoutine(routine);
         setPanel("routine");
       } else {
         setPanel("computer");
@@ -657,19 +1203,166 @@ export function ShellPage() {
       setSearchParams(next, { replace: true });
     }
     if (messageId) {
-      void jumpToMessage(active.id, messageId).finally(() => {
+      void jumpToMessage({ botId: active.id, messageId }).finally(() => {
         const next = new URLSearchParams(searchParams);
         next.delete("m");
         setSearchParams(next, { replace: true });
       });
     }
-  }, [active?.id, routines, routinesBotId, searchParams, setSearchParams]);
-  const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
-  const shellReady = initialBotsLoaded && Boolean(active && snapshot?.botId === active.id);
+  }, [active?.id, groupId, inGroup, routines, routinesBotId, searchParams, setSearchParams]);
+  const activeSnapshot = inGroup
+    ? snapshot?.groupId === groupId
+      ? snapshot
+      : null
+    : snapshot?.botId === active?.id
+      ? snapshot
+      : null;
+  const activeReplyTarget =
+    replyTarget && activeSnapshot?.messages.some((message) => message.id === replyTarget.id)
+      ? replyTarget
+      : null;
+  const currentRuns = activeThreadRuns(activeSnapshot);
+  const answerableAskMessageId = latestAnswerableAskMessageId(activeSnapshot);
+  const workingRuns = currentRuns.filter((run) =>
+    ["running", "queued", "leased"].includes(run.status),
+  );
+  const transcriptRunning = workingRuns.length > 0;
+  const composerRunning = currentRuns.some((run) => isActive(run.status));
+  const transcriptArtifactTarget = useMemo<ArtifactTarget>(
+    () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
+    [active?.id, groupId, inGroup],
+  );
+  const transcriptMembers = activeSnapshot?.members ?? activeGroup?.members;
+  const resolveTranscriptBot = useCallback(
+    (botId: string) => {
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (bot) return bot;
+      return transcriptMembers?.find((member) => member.botId === botId);
+    },
+    [bots, transcriptMembers],
+  );
+  const workingBots: GroupAvatarMember[] = workingRuns.map((run) => {
+    const bot = resolveTranscriptBot(run.botId);
+    return {
+      botId: run.botId,
+      color: bot?.color ?? "#85858A",
+      name: bot?.name,
+      status: run.status,
+    };
+  });
+  const resolveTranscriptMemberName = useCallback(
+    (botId: string | undefined) => memberName(transcriptMembers, botId),
+    [transcriptMembers],
+  );
+  const replyTargetName = activeReplyTarget
+    ? activeReplyTarget.role === "user"
+      ? t`You`
+      : (resolveTranscriptMemberName(activeReplyTarget.botId) ?? active?.name ?? t`Bot`)
+    : undefined;
+  const composerMentionTargets = useMemo(
+    () =>
+      buildComposerMentionOptions({
+        query: "",
+        includeEveryone: inGroup,
+        currentGroupId: groupId,
+        bots: bots.map((bot) => ({ id: bot.id, name: bot.name, color: bot.color })),
+        groups: groups.map((group) => ({ id: group.id, name: group.name })),
+        routines: mentionRoutines.map((routine) => ({
+          id: routine.id,
+          name: routine.name,
+          crons: routine.crons,
+          botId: routine.botId,
+          botName: routine.botName,
+        })),
+        connectors: mentionConnectors,
+      }),
+    [bots, groupId, groups, inGroup, mentionConnectors, mentionRoutines],
+  );
+  const shellReady =
+    initialBotsLoaded &&
+    (inGroup
+      ? Boolean(activeGroup && activeSnapshot)
+      : bots.length === 0 || Boolean(active && activeSnapshot));
   const refreshThreadRef = useRef(refreshThread);
   refreshThreadRef.current = refreshThread;
+  const refreshGroupThreadRef = useRef(refreshGroupThread);
+  refreshGroupThreadRef.current = refreshGroupThread;
   const loadOlderMessagesRef = useRef(loadOlderMessages);
   loadOlderMessagesRef.current = loadOlderMessages;
+  const jumpToMessageRef = useRef(jumpToMessage);
+  jumpToMessageRef.current = jumpToMessage;
+
+  const mentionBotsKey = useMemo(
+    () => bots.map((bot) => `${bot.id}:${bot.name}`).join(","),
+    [bots],
+  );
+  const botsForMentionsRef = useRef(bots);
+  botsForMentionsRef.current = bots;
+
+  useEffect(() => {
+    const bots = botsForMentionsRef.current;
+    if (!initialBotsLoaded || bots.length === 0) {
+      setMentionRoutines([]);
+      setMentionConnectors([]);
+      return;
+    }
+    let cancelled = false;
+    const botNameById = new Map(bots.map((bot) => [bot.id, bot.name]));
+    void Promise.all(
+      bots.map((bot) =>
+        rpc.routines
+          .list({ botId: bot.id })
+          .then((rows) =>
+            rows.map((routine) => ({
+              ...routine,
+              botName: botNameById.get(bot.id) ?? bot.name,
+            })),
+          )
+          .catch(() => [] as Array<Routine & { botName?: string }>),
+      ),
+    ).then((lists) => {
+      if (!cancelled) setMentionRoutines(lists.flat());
+    });
+    void Promise.all([
+      rpc.connections.list().catch(() => [] as Connection[]),
+      rpc.connections.catalog({}).catch(() => [] as ConnectionCatalogItem[]),
+    ]).then(([connections, catalog]) => {
+      if (cancelled) return;
+      const connected = connections.filter((row) => row.status === "connected");
+      const options: Array<{
+        id: string;
+        name: string;
+        authStatus: "connected" | "needs_auth";
+        connectionId?: string;
+      }> = connected.map((row) => ({
+        id: row.id,
+        name: row.displayName,
+        authStatus: "connected" as const,
+        connectionId: row.id,
+      }));
+      for (const item of catalog) {
+        if (item.connected || item.noAuth) continue;
+        if (
+          connected.some(
+            (row) =>
+              row.provider.toLowerCase() === item.slug.toLowerCase() ||
+              row.displayName.toLowerCase() === item.name.toLowerCase(),
+          )
+        ) {
+          continue;
+        }
+        options.push({
+          id: `catalog:${item.connectorId}:${item.slug}`,
+          name: item.name,
+          authStatus: "needs_auth",
+        });
+      }
+      setMentionConnectors(options);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialBotsLoaded, mentionBotsKey]);
 
   useLayoutEffect(() => {
     if (initialBotsLoaded) {
@@ -687,42 +1380,72 @@ export function ShellPage() {
   }, [active, initialBotsLoaded, shellReady, snapshot?.botId]);
 
   useLayoutEffect(() => {
-    if (!active || snapshot?.botId !== active.id) return;
-    if (initiallyScrolledThread.current === snapshot.threadId) return;
-    if (pinnedAroundRef.current?.botId === active.id) return;
+    const pin = pinnedAroundRef.current;
+    if (inGroup) {
+      if (!groupId || !snapshot || snapshot.groupId !== groupId) return;
+      if (initiallyScrolledThread.current === snapshot.threadId) return;
+      if (expandedHistoryThread.current === snapshot.threadId) return;
+      if (pin?.groupId === groupId) return;
+    } else {
+      if (!active || !snapshot || snapshot.botId !== active.id) return;
+      if (initiallyScrolledThread.current === snapshot.threadId) return;
+      if (expandedHistoryThread.current === snapshot.threadId) return;
+      if (pin?.botId === active.id) return;
+    }
     const element = messageScroll.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
     initiallyScrolledThread.current = snapshot.threadId;
-  }, [active, snapshot?.botId, snapshot?.threadId]);
+  }, [active, groupId, inGroup, snapshot?.botId, snapshot?.groupId, snapshot?.threadId]);
 
   const openBot = useCallback((id: string) => navigate(`/app/${id}`), [navigate]);
   const loadOlder = useCallback(() => loadOlderMessagesRef.current(), []);
+  const jumpToReplyMessage = useCallback((messageId: string) => {
+    const existing = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+    if (existing) {
+      // Cancel any in-flight around-fetch so it cannot overwrite this scroll.
+      jumpGeneration.current += 1;
+      existing.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    const groupId = activeGroupId.current;
+    if (groupId) {
+      void jumpToMessageRef.current({ groupId, messageId });
+      return;
+    }
+    const botId = activeBotId.current;
+    if (botId) void jumpToMessageRef.current({ botId, messageId });
+  }, []);
   const answerMessage = useCallback(async (message: ThreadMessage, text: string) => {
-    const id = activeBotId.current;
-    if (!id) return;
+    const botId = activeBotId.current;
+    const groupId = activeGroupId.current;
+    if (!botId && !groupId) return;
     await rpc.threads.answer({
-      botId: id,
+      ...(groupId ? { groupId } : { botId: botId! }),
       runId: message.runId ?? "",
       messageId: message.id,
       answer: text,
     });
-    await refreshThreadRef.current(id);
+    if (groupId && activeGroupId.current === groupId) {
+      await refreshGroupThreadRef.current(groupId);
+    } else if (botId && activeBotId.current === botId) {
+      await refreshThreadRef.current(botId);
+    }
   }, []);
   const onAttachmentPick = useCallback(
     async (files: FileList | null) => {
-      const id = activeBotId.current;
-      if (!id || !files?.length) return;
-      const existing = attachmentsForBot(pendingAttachments, id);
+      const threadKey = activeGroupId.current ?? activeBotId.current;
+      if (!threadKey || !files?.length) return;
+      const existing = attachmentsForThread(pendingAttachments, threadKey);
       const next: PendingAttachment[] = [];
       const skipped: string[] = [];
       for (const file of Array.from(files)) {
         if (existing.length + next.length >= ATTACHMENT_MAX_COUNT) {
-          skipped.push(`${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
+          skipped.push(t`${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
           continue;
         }
         if (file.size > ATTACHMENT_MAX_BYTES) {
-          skipped.push(`${file.name} (over 10 MiB)`);
+          skipped.push(t`${file.name} (over 10 MiB)`);
           continue;
         }
         const mimeType = inferAttachmentMimeType(file.name, file.type);
@@ -732,64 +1455,131 @@ export function ShellPage() {
         }
         next.push({
           id: `${file.name}-${file.size}-${file.lastModified}-${next.length}`,
-          botId: id,
+          threadKey,
           file,
           previewUrl: mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined,
         });
       }
       if (next.length) setPendingAttachments((current) => [...current, ...next]);
-      setAttachmentNotice(skipped.length ? `Skipped ${skipped.join(", ")}` : null);
+      setAttachmentNotice(skipped.length ? t`Skipped ${skipped.join(", ")}` : null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [pendingAttachments],
+    [pendingAttachments, t],
   );
   const removeAttachment = useCallback((attachment: PendingAttachment) => {
     revokePendingAttachmentPreviews([attachment]);
     setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id));
   }, []);
   const sendMessage = useCallback(
-    async (text: string) => {
-      const id = activeBotId.current;
-      if (!id || sending) return;
-      const attachments = attachmentsForBot(pendingAttachments, id);
-      const trimmed = text.trim();
-      if (!trimmed && attachments.length === 0) return;
+    async (text: string, mentions: ComposerMention[] = []) => {
+      const initialBotTarget = activeBotId.current;
+      const initialGroupTarget = activeGroupId.current;
+      if ((!initialBotTarget && !initialGroupTarget) || sending) return;
+      const originThreadKey = initialGroupTarget ?? initialBotTarget;
+      const attachments = attachmentsForThread(pendingAttachments, originThreadKey);
+      const plan = resolveComposerSendPlan({
+        text,
+        mentions,
+        hasAttachments: attachments.length > 0,
+      });
+      if (plan.isNoOp) return;
+      const reroutedToGroup = Boolean(
+        plan.rerouteGroupId && plan.rerouteGroupId !== initialGroupTarget,
+      );
+      const groupTarget = plan.rerouteGroupId ?? initialGroupTarget;
+      const botTarget = reroutedToGroup ? undefined : initialBotTarget;
+      const trimmed = plan.trimmed;
       setSending(true);
       setSendError(null);
       try {
+        if (plan.shouldRunRoutines) {
+          const sendNonce = crypto.randomUUID();
+          await Promise.all(
+            plan.routineIds.map((routineId) =>
+              rpc.routines.testRun({
+                routineId,
+                clientNonce: `routine-mention:${sendNonce}:${routineId}`,
+              }),
+            ),
+          );
+        }
+        if (!plan.shouldSend) {
+          setReplyTarget(null);
+          revokePendingAttachmentPreviews(attachments);
+          setPendingAttachments((current) =>
+            current.filter((attachment) => attachment.threadKey !== originThreadKey),
+          );
+          setAttachmentNotice(null);
+          if (reroutedToGroup && groupTarget) {
+            navigate(`/app/g/${groupTarget}`);
+            return;
+          }
+          if (groupTarget && activeGroupId.current === groupTarget) {
+            await refreshGroupThreadRef.current(groupTarget);
+          } else if (botTarget && activeBotId.current === botTarget) {
+            await refreshThreadRef.current(botTarget);
+          }
+          return;
+        }
         const artifactIds: string[] = [];
         for (const pending of attachments) {
           const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
           if (!mimeType) {
-            throw new Error(`Unsupported file type: ${pending.file.name}`);
+            throw new Error(t`Unsupported file type: ${pending.file.name}`);
           }
           const contentBase64 = await readFileAsBase64(pending.file);
-          const artifact = await rpc.artifacts.create({
-            botId: id,
-            name: pending.file.name,
-            mimeType,
-            contentBase64,
-          });
+          const artifact = await rpc.artifacts.create(
+            groupTarget
+              ? { groupId: groupTarget, name: pending.file.name, mimeType, contentBase64 }
+              : { botId: botTarget!, name: pending.file.name, mimeType, contentBase64 },
+          );
           artifactIds.push(artifact.id);
         }
-        await rpc.threads.send({
-          botId: id,
-          text: trimmed || undefined,
-          artifactIds: artifactIds.length ? artifactIds : undefined,
-        });
+        if (groupTarget) {
+          await rpc.threads.send({
+            groupId: groupTarget,
+            text: trimmed || undefined,
+            mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
+            artifactIds: artifactIds.length ? artifactIds : undefined,
+            replyToMessageId: reroutedToGroup ? undefined : activeReplyTarget?.id,
+          });
+        } else if (botTarget) {
+          await rpc.threads.send({
+            botId: botTarget,
+            text: trimmed || undefined,
+            mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
+            artifactIds: artifactIds.length ? artifactIds : undefined,
+            replyToMessageId: activeReplyTarget?.id,
+          });
+        }
+        setReplyTarget(null);
         revokePendingAttachmentPreviews(attachments);
-        setPendingAttachments((current) => current.filter((attachment) => attachment.botId !== id));
-        if (activeBotId.current === id) setAttachmentNotice(null);
-        await refreshThreadRef.current(id);
+        setPendingAttachments((current) =>
+          current.filter((attachment) => attachment.threadKey !== originThreadKey),
+        );
+        // Refresh sidebar status even when a bot→group reroute navigates away below.
+        void refreshBots().catch(() => undefined);
+        if (reroutedToGroup && groupTarget) {
+          navigate(`/app/g/${groupTarget}`);
+          return;
+        }
+        if (groupTarget && activeGroupId.current === groupTarget) setAttachmentNotice(null);
+        if (botTarget && activeBotId.current === botTarget) setAttachmentNotice(null);
+        if (groupTarget) await refreshGroupThreadRef.current(groupTarget);
+        else if (botTarget) await refreshThreadRef.current(botTarget);
       } catch (error) {
-        if (activeBotId.current === id) {
-          setSendError(error instanceof Error ? error.message : "Failed to send message");
+        if (reroutedToGroup && groupTarget) {
+          setSendError(error instanceof Error ? error.message : t`Failed to send message`);
+        } else if (groupTarget && activeGroupId.current === groupTarget) {
+          setSendError(error instanceof Error ? error.message : t`Failed to send message`);
+        } else if (botTarget && activeBotId.current === botTarget) {
+          setSendError(error instanceof Error ? error.message : t`Failed to send message`);
         }
       } finally {
         setSending(false);
       }
     },
-    [pendingAttachments, sending],
+    [activeReplyTarget?.id, navigate, pendingAttachments, sending, t],
   );
   const followUpMessage = useCallback(async (text: string) => {
     const id = activeBotId.current;
@@ -798,11 +1588,52 @@ export function ShellPage() {
     await refreshThreadRef.current(id);
   }, []);
   const stopRun = useCallback(async () => {
-    const id = activeBotId.current;
-    if (!id) return;
-    await rpc.threads.stop({ botId: id });
-    await refreshThreadRef.current(id);
-  }, []);
+    const botTarget = activeBotId.current;
+    const groupTarget = activeGroupId.current;
+    if (groupTarget) {
+      setSendError(null);
+      try {
+        await rpc.threads.stop({ groupId: groupTarget });
+      } catch (error) {
+        if (activeGroupId.current === groupTarget) {
+          setSendError(error instanceof Error ? error.message : t`Failed to stop`);
+        }
+        return;
+      }
+      // Stop has no terminal event; clear run UI before refresh races with in-flight gets.
+      if (activeGroupId.current === groupTarget) {
+        updateSnapshot((prev) =>
+          prev && prev.groupId === groupTarget ? clearActiveThreadRuns(prev) : prev,
+        );
+      }
+      await refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
+      return;
+    }
+    if (!botTarget) return;
+    setSendError(null);
+    try {
+      await rpc.threads.stop({ botId: botTarget });
+    } catch (error) {
+      if (activeBotId.current === botTarget) {
+        setSendError(error instanceof Error ? error.message : t`Failed to stop`);
+      }
+      return;
+    }
+    // Stop does not emit a terminal thread event. Clear local run/busy immediately so a
+    // superseded in-flight refresh (older cursor) cannot leave Stop enabled / Take control
+    // blocked while the API is already idle.
+    if (activeBotId.current === botTarget) {
+      updateSnapshot((prev) => {
+        if (!prev || (prev.botId !== botTarget && prev.botId)) return prev;
+        return clearActiveThreadRuns(prev);
+      });
+      const currentComputer = computerRef.current;
+      if (currentComputer?.busyBotName) {
+        commitComputer({ ...currentComputer, busyBotName: null });
+      }
+    }
+    await refreshThreadRef.current(botTarget).catch(() => undefined);
+  }, [t]);
   const stopTeaching = useCallback(async () => {
     const id = activeBotId.current;
     if (!id || teachBusy) return;
@@ -822,12 +1653,18 @@ export function ShellPage() {
   // Transcript and MessageView are memoized; these must stay referentially stable or every
   // Shell state change re-renders the whole transcript.
   const refreshActiveThread = useCallback(async () => {
+    const groupId = activeGroupId.current;
+    if (groupId) {
+      await refreshGroupThreadRef.current(groupId);
+      return;
+    }
     const id = activeBotId.current;
     if (!id) return;
     await refreshThreadRef.current(id);
   }, []);
   const addSkillRoutine = useCallback((name: string, prompt: string) => {
-    setRoutineDraft({ name, prompt, schedule: defaultCronPreset() });
+    setRoutineDraft({ ...emptyRoutineDraft(), name, prompt });
+    setRoutineWebhookSecret(null);
     setEditingRoutine(null);
     setPanel("routine");
   }, []);
@@ -839,9 +1676,19 @@ export function ShellPage() {
       return;
     }
     const text = speechFromBlocks(message.blocks);
-    const id = activeBotId.current;
+    const id = message.botId ?? activeBotId.current;
     if (text && id) void speaker.speak(text, { botId: id, messageId: message.id });
   }, []);
+
+  async function createGroup(input: { name: string; botIds: string[] }) {
+    const group = await rpc.groups.create(input);
+    setGroups((current) =>
+      current.some((item) => item.id === group.id) ? current : [group, ...current],
+    );
+    navigate(`/app/g/${group.id}`);
+    setPanel(null);
+    await refreshBots().catch(() => undefined);
+  }
 
   async function createBot(input: {
     name: string;
@@ -850,16 +1697,16 @@ export function ShellPage() {
     computerMode: ComputerMode;
   }) {
     const bot = await rpc.bots.create({
-      name: input.name.trim(),
-      title: input.title,
-      description: input.description,
-      instructions: input.description,
+      ...normalizeCreateBotProfile(input),
       notifyOnFinish: true,
       computerMode: input.computerMode,
     });
-    await refreshBots();
+    setBots((current) =>
+      current.some((item) => item.id === bot.id) ? current : [bot, ...current],
+    );
     navigate(`/app/${bot.id}`);
     setPanel(null);
+    await refreshBots().catch(() => undefined);
   }
 
   async function bootComputer({
@@ -878,6 +1725,10 @@ export function ShellPage() {
       if (needsBoot) await rpc.computer.boot({ botId: active.id });
       if (takeControl) await rpc.computer.takeover({ botId: active.id });
       await refreshThread(active.id);
+      setComputerError(null);
+    } catch (error) {
+      setComputerError(error instanceof Error ? error.message : t`Could not take control`);
+      throw error;
     } finally {
       setBooting(false);
     }
@@ -906,11 +1757,12 @@ export function ShellPage() {
       }
       if (action === "boot" && autoBooted.current === botId) return;
       autoBooted.current = botId;
+      if (!computerPanelAutoUsesBoot(action)) return;
       await bootComputer({
         takeControl: false,
         overlay: action === "boot",
         force: true,
-      });
+      }).catch(() => undefined);
     })();
     return () => {
       cancelled = true;
@@ -919,7 +1771,19 @@ export function ShellPage() {
 
   useEffect(() => {
     setComputerOpen(false);
+    setComputerError(null);
   }, [active?.id]);
+
+  useEffect(() => {
+    if (!computer?.busyBotName) setComputerError(null);
+  }, [computer?.busyBotName]);
+
+  useEffect(() => {
+    if (panel !== "routine") {
+      routineSaveRequest.current += 1;
+      setRoutineError(null);
+    }
+  }, [panel]);
 
   // The routine panel copies a routine's data into local draft state at click time
   // rather than deriving it from `active`, so it goes stale across a bot switch —
@@ -931,14 +1795,16 @@ export function ShellPage() {
   }, [active?.id]);
 
   useEffect(() => {
+    const threadKey = inGroup ? groupId : active?.id;
     setPendingAttachments((current) => {
-      const stale = current.filter((attachment) => attachment.botId !== active?.id);
+      const stale = current.filter((attachment) => attachment.threadKey !== threadKey);
       revokePendingAttachmentPreviews(stale);
-      return attachmentsForBot(current, active?.id);
+      return attachmentsForThread(current, threadKey);
     });
+    setReplyTarget(null);
     setAttachmentNotice(null);
     setSendError(null);
-  }, [active?.id]);
+  }, [active?.id, groupId, inGroup]);
 
   useEffect(() => {
     if (!computerOpen) return;
@@ -960,25 +1826,31 @@ export function ShellPage() {
   async function openComputer() {
     if (!active) return;
     const needsTakeover = !userHoldsComputerControl(computer, active.id);
-    await bootComputer({
-      takeControl: needsTakeover,
-      overlay: needsTakeover || computer?.state !== "running",
-      force: computer?.state !== "running",
-    });
-    setComputerOpen(true);
+    const blocked = computerTakeoverBlocked(computer, snapshot?.run?.status);
+    try {
+      await bootComputer({
+        takeControl: needsTakeover && !blocked,
+        overlay: (needsTakeover && !blocked) || computer?.state !== "running",
+        force: computer?.state !== "running",
+      });
+      setComputerOpen(true);
+    } catch {
+      // computerError already set in bootComputer
+    }
   }
 
-  async function releaseComputer() {
+  async function releaseComputer(reason?: ComputerReleaseReason) {
     if (!active) return;
     setComputerOpen(false);
-    await rpc.computer.release({ botId: active.id }).catch(() => undefined);
+    await rpc.computer.release({ botId: active.id, reason }).catch(() => undefined);
     await refreshThread(active.id);
   }
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
   const hasControl = userHoldsComputerControl(computer, active?.id);
+  const takeoverBlocked = computerTakeoverBlocked(computer, snapshot?.run?.status);
 
-  const userName = session.data?.user.name ?? "You";
+  const userName = session.data?.user.name ?? t`You`;
   const initials = userName
     .split(" ")
     .map((p) => p[0])
@@ -986,7 +1858,7 @@ export function ShellPage() {
     .slice(0, 2)
     .toUpperCase();
 
-  return (
+  const shell = (
     <div
       data-testid="shell-root"
       data-ready={shellReady}
@@ -995,24 +1867,80 @@ export function ShellPage() {
       {bootstrapMe !== undefined ? (
         <HostComputerPrompt initialMe={bootstrapMe ?? undefined} />
       ) : null}
-      <aside className="flex w-[316px] shrink-0 flex-col border-r border-[#171719] bg-[#0B0B0C]">
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          aria-label={t`Close navigation`}
+          onClick={() => setMobileSidebarOpen(false)}
+          className="absolute inset-y-0 end-0 start-[min(calc(100%-48px),316px)] z-30 bg-black/60 md:hidden"
+        />
+      ) : null}
+      <aside
+        className={`absolute inset-y-0 start-0 z-40 flex w-[calc(100%-48px)] max-w-[316px] shrink-0 flex-col border-e border-[#171719] bg-[#0B0B0C] transition-transform md:static md:z-auto md:w-[316px] md:translate-x-0 ${
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full"
+        }`}
+      >
         <div className="app-drag flex items-center justify-between px-[18px] pb-3 pt-4">
           <WindowChrome />
-          <button
-            type="button"
-            onClick={() => setPanel("create")}
-            className="app-no-drag text-[21px] text-[#7A7A80] hover:text-[#C9C9CE]"
-            title="New bot"
-          >
-            +
-          </button>
+          <div className="relative flex items-center gap-2.5">
+            <button
+              type="button"
+              aria-label={t`Activity`}
+              aria-pressed={activityMode}
+              title={t`Activity`}
+              data-activity-mode={activityMode ? "on" : "off"}
+              onClick={toggleActivityMode}
+              className={`app-no-drag flex h-7 w-7 items-center justify-center rounded-full ${
+                activityMode ? "bg-[#4C8DFF] text-white" : "text-[#7A7A80] hover:text-[#C9C9CE]"
+              }`}
+            >
+              <Bell
+                size={15}
+                strokeWidth={1.8}
+                fill={activityMode ? "currentColor" : "none"}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateMenuOpen((open) => !open)}
+              className="app-no-drag text-[21px] text-[#7A7A80] hover:text-[#C9C9CE]"
+              title={t`Create`}
+            >
+              +
+            </button>
+            {createMenuOpen ? (
+              <div className="app-no-drag absolute end-0 top-full z-20 mt-2 min-w-[160px] rounded-xl border border-[#26262A] bg-[#141416] py-1 shadow-lg">
+                <button
+                  type="button"
+                  className="block w-full px-3.5 py-2 text-start text-[14px] text-[#ECECEE] hover:bg-[#1A1A1D]"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    setPanel("create");
+                  }}
+                >
+                  <Trans>New bot</Trans>
+                </button>
+                <button
+                  type="button"
+                  className="block w-full px-3.5 py-2 text-start text-[14px] text-[#ECECEE] hover:bg-[#1A1A1D]"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    setPanel("create-group");
+                  }}
+                >
+                  <Trans>New group</Trans>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="mx-3.5 mb-3 flex items-center gap-2.5 rounded-xl border border-[#202023] bg-[#141416] px-3 py-2 text-[14px] text-[#6C6C70]">
           <span>⌕</span>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search"
+            placeholder={t`Search`}
             className="w-full bg-transparent outline-none"
           />
         </div>
@@ -1024,65 +1952,157 @@ export function ShellPage() {
               onSelect={(hit) => void jumpToSearchHit(hit)}
             />
           ) : (
-            sidebarGroups.map((group) => (
-              <div key={group.key} data-sidebar-group={group.key}>
-                {group.title ? (
-                  <div className="px-2.5 pb-1 pt-3 text-[12.5px] font-medium text-[#6C6C70]">
-                    {group.title}
-                  </div>
-                ) : null}
-                {group.bots.map((bot) => (
-                  <button
-                    key={bot.id}
-                    type="button"
-                    onClick={() => navigate(`/app/${bot.id}`)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      setBotMenu({
-                        botId: bot.id,
-                        position: { x: event.clientX, y: event.clientY },
-                      });
-                    }}
-                    className="flex w-full gap-3 rounded-xl px-2.5 py-[11px] text-left"
-                    style={{
-                      background: active?.id === bot.id ? "#161618" : "transparent",
-                    }}
-                  >
-                    <BotAvatar color={bot.color} size={38} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span
-                          className={`truncate text-[15px] text-[#ECECEE] ${
-                            bot.unread ? "font-semibold" : "font-medium"
-                          }`}
+            <>
+              {activityMode ? (
+                <ActivityList
+                  onOpenRun={(run) => {
+                    setMobileSidebarOpen(false);
+                    if (run.groupId) navigate(`/app/g/${run.groupId}`);
+                    else navigate(`/app/${run.botId}`);
+                  }}
+                />
+              ) : null}
+              {sidebarGroups.map((group) => {
+                const collapsed = Boolean(group.title) && collapsedSidebarSections.has(group.key);
+                return (
+                  <div key={group.key} data-sidebar-group={group.key}>
+                    {group.title ? (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-[#6C6C70] hover:bg-[#1A1A1D] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#8B5CF6]"
+                          onClick={() => toggleSidebarSection(group.key)}
+                          aria-expanded={!collapsed}
+                          aria-label={
+                            collapsed ? t`Expand ${group.title}` : t`Collapse ${group.title}`
+                          }
                         >
-                          {bot.name}
-                          {bot.unread ? <span className="sr-only"> (unread)</span> : null}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-[#6C6C70]">
-                          {bot.status === "idle" ? "" : bot.status}
-                          {bot.unread ? (
-                            <span
-                              aria-hidden="true"
-                              className="inline-block h-2 w-2 rounded-full bg-[#8B5CF6]"
+                          <span>{group.title}</span>
+                          <ChevronDown
+                            size={14}
+                            strokeWidth={1.8}
+                            className={
+                              collapsed ? "-rotate-90 transition-transform" : "transition-transform"
+                            }
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </div>
+                    ) : null}
+                    {!collapsed &&
+                      group.bots.map((item) => (
+                        <button
+                          key={`${item.kind}:${item.chat.id}`}
+                          type="button"
+                          onClick={() => {
+                            setMobileSidebarOpen(false);
+                            navigate(
+                              item.kind === "bot"
+                                ? `/app/${item.chat.id}`
+                                : `/app/g/${item.chat.id}`,
+                            );
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setBotMenu({
+                              kind: item.kind,
+                              id: item.chat.id,
+                              position: { x: event.clientX, y: event.clientY },
+                            });
+                          }}
+                          className="flex w-full gap-3 rounded-xl px-2.5 py-[11px] text-start"
+                          style={{
+                            background:
+                              (item.kind === "bot" && !inGroup && active?.id === item.chat.id) ||
+                              (item.kind === "group" && inGroup && activeGroup?.id === item.chat.id)
+                                ? "#161618"
+                                : "transparent",
+                          }}
+                        >
+                          {item.kind === "bot" ? (
+                            <BotAvatar
+                              color={item.chat.color}
+                              identity={item.chat.id}
+                              size={38}
+                              status={item.chat.status}
                             />
-                          ) : null}
-                        </span>
-                      </div>
-                      <div
-                        className={`mt-0.5 truncate text-[13.5px] ${
-                          bot.unread ? "font-medium text-[#C9C9CE]" : "text-[#85858A]"
-                        }`}
-                      >
-                        {bot.preview || bot.title}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ))
+                          ) : (
+                            <GroupAvatar
+                              members={
+                                item.chat.id === activeSnapshot?.groupId
+                                  ? (activeSnapshot.members ?? item.chat.members)
+                                  : item.chat.members
+                              }
+                              size={38}
+                            />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span
+                                dir="auto"
+                                className={`truncate text-[15px] text-[#ECECEE] ${
+                                  item.chat.unread ? "font-semibold" : "font-medium"
+                                }`}
+                              >
+                                {item.chat.name}
+                                {item.chat.unread ? (
+                                  <span className="sr-only">
+                                    <Trans> (unread)</Trans>
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-[#6C6C70]">
+                                {item.kind === "bot" && item.chat.status !== "idle"
+                                  ? item.chat.status
+                                  : ""}
+                                {item.chat.unread ? (
+                                  <span
+                                    aria-hidden="true"
+                                    className="inline-block h-2 w-2 rounded-full bg-[#8B5CF6]"
+                                  />
+                                ) : null}
+                              </span>
+                            </div>
+                            {item.kind === "bot" && item.chat.title ? (
+                              <>
+                                <div
+                                  dir="auto"
+                                  className={`mt-0.5 truncate text-[13.5px] ${
+                                    item.chat.unread
+                                      ? "font-medium text-[#C9C9CE]"
+                                      : "text-[#85858A]"
+                                  }`}
+                                >
+                                  {item.chat.title}
+                                </div>
+                                {item.chat.preview ? (
+                                  <div dir="auto" className="truncate text-[12.5px] text-[#6C6C70]">
+                                    {item.chat.preview}
+                                  </div>
+                                ) : null}
+                              </>
+                            ) : (
+                              <div
+                                dir="auto"
+                                className={`mt-0.5 truncate text-[13.5px] ${
+                                  item.chat.unread ? "font-medium text-[#C9C9CE]" : "text-[#85858A]"
+                                }`}
+                              >
+                                {item.kind === "bot"
+                                  ? item.chat.preview
+                                  : item.chat.preview ||
+                                    item.chat.members.map((member) => member.name).join(", ")}
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                );
+              })}
+            </>
           )}
-          {archivedBots.length > 0 && !showWorkspaceSearch ? (
+          {archivedBots.length + archivedGroups.length > 0 && !showWorkspaceSearch ? (
             <div className="mt-2 border-t border-[#202023] pt-2">
               <button
                 type="button"
@@ -1090,14 +2110,25 @@ export function ShellPage() {
                 onClick={() => setArchivedOpen((open) => !open)}
                 className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[13.5px] text-[#85858A] hover:bg-[#131315]"
               >
-                <span>Archived</span>
-                <span>{archivedBots.length}</span>
+                <span>
+                  <Trans>Archived</Trans>
+                </span>
+                <span>{archivedBots.length + archivedGroups.length}</span>
               </button>
-              {archivedOpen
-                ? archivedBots.map((bot) => (
+              {archivedOpen ? (
+                <>
+                  {archivedBots.map((bot) => (
                     <div key={bot.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2">
-                      <BotAvatar color={bot.color} size={28} />
-                      <span className="min-w-0 flex-1 truncate text-[14px] text-[#A8A8AD]">
+                      <BotAvatar
+                        color={bot.color}
+                        identity={bot.id}
+                        size={28}
+                        status={bot.status}
+                      />
+                      <span
+                        className="min-w-0 flex-1 truncate text-[14px] text-[#A8A8AD]"
+                        dir="auto"
+                      >
                         {bot.name}
                       </span>
                       <button
@@ -1107,19 +2138,50 @@ export function ShellPage() {
                         }
                         className="text-[12.5px] text-[#C9C9CE] hover:text-white"
                       >
-                        Restore
+                        <Trans>Restore</Trans>
                       </button>
                       <button
                         type="button"
-                        aria-label={`Delete ${bot.name}`}
+                        aria-label={t`Delete ${bot.name}`}
                         onClick={() => setDeleteTarget(bot)}
                         className="text-[12.5px] text-[#FF5364]"
                       >
-                        Delete
+                        <Trans>Delete</Trans>
                       </button>
                     </div>
-                  ))
-                : null}
+                  ))}
+                  {archivedGroups.map((group) => (
+                    <div key={group.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2">
+                      <GroupAvatar members={group.members} size={28} />
+                      <span
+                        className="min-w-0 flex-1 truncate text-[14px] text-[#A8A8AD]"
+                        dir="auto"
+                      >
+                        {group.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void rpc.groups
+                            .restore({ groupId: group.id })
+                            .then(() => refreshBots(true))
+                        }
+                        className="text-[12.5px] text-[#C9C9CE] hover:text-white"
+                      >
+                        <Trans>Restore</Trans>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t`Delete ${group.name}`}
+                        onClick={() => setDeleteGroupTarget(group)}
+                        className="text-[12.5px] text-[#FF5364]"
+                      >
+                        <Trans>Delete</Trans>
+                      </button>
+                    </div>
+                  ))}
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1131,11 +2193,28 @@ export function ShellPage() {
           <span className="grid h-[30px] w-[30px] place-items-center rounded-full bg-[#17171A] text-[#9A9AA0]">
             <Puzzle size={15} strokeWidth={1.7} />
           </span>
-          <span className="text-[14.5px] text-[#C9C9CE]">Plugins</span>
+          <span className="text-[14.5px] text-[#C9C9CE]">
+            <Trans>Integrations</Trans>
+          </span>
         </button>
         <div className="relative">
           {menuOpen ? (
-            <div className="absolute bottom-14 left-3 right-3 rounded-2xl border border-[#2A2A2F] bg-[#1A1A1D] p-2 shadow-[0_22px_50px_rgba(0,0,0,.55)]">
+            <div className="absolute bottom-14 inset-x-3 rounded-2xl border border-[#2A2A2F] bg-[#1A1A1D] p-2 shadow-[0_22px_50px_rgba(0,0,0,.55)]">
+              <button
+                type="button"
+                aria-label={t`Settings`}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAccountSettingsFocusUsage(false);
+                  setAccountSettingsOpen(true);
+                }}
+                className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
+              >
+                <span className="text-[#9A9AA0]">⚙</span>
+                <span className="flex-1 text-start text-[14.5px] text-[#ECECEE]">
+                  <Trans>Settings</Trans>
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1145,7 +2224,22 @@ export function ShellPage() {
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
                 <Cpu size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
-                <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Models</span>
+                <span className="flex-1 text-start text-[14.5px] text-[#ECECEE]">
+                  <Trans>Models</Trans>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setMemorySettingsOpen(true);
+                }}
+                className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
+              >
+                <span className="text-[#9A9AA0]">◇</span>
+                <span className="flex-1 text-start text-[14.5px] text-[#ECECEE]">
+                  <Trans>Memory</Trans>
+                </span>
               </button>
               <button
                 type="button"
@@ -1156,7 +2250,9 @@ export function ShellPage() {
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
                 <Volume2 size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
-                <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Voice</span>
+                <span className="flex-1 text-start text-[14.5px] text-[#ECECEE]">
+                  <Trans>Voice</Trans>
+                </span>
               </button>
               <button
                 type="button"
@@ -1166,11 +2262,15 @@ export function ShellPage() {
                 }}
               >
                 <Gauge size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
-                <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Weekly usage</span>
+                <span className="flex-1 text-start text-[14.5px] text-[#ECECEE]">
+                  <Trans>Usage</Trans>
+                </span>
               </button>
               {usage ? (
                 <p className="px-3 pb-2 text-[12.5px] text-[#85858A]">
-                  {usage.runs} runs · {usage.inputTokens + usage.outputTokens} tokens
+                  <Trans>
+                    {usage.runs} runs · {usage.inputTokens + usage.outputTokens} tokens
+                  </Trans>
                 </p>
               ) : null}
               <button
@@ -1179,12 +2279,15 @@ export function ShellPage() {
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
                 <LogOut size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
-                <span className="text-[14.5px] text-[#ECECEE]">Log out</span>
+                <span className="text-[14.5px] text-[#ECECEE]">
+                  <Trans>Log out</Trans>
+                </span>
               </button>
             </div>
           ) : null}
           <button
             type="button"
+            data-testid="user-menu-trigger"
             onClick={() => setMenuOpen((v) => !v)}
             className="flex items-center gap-[11px] px-[18px] py-3.5"
           >
@@ -1197,26 +2300,50 @@ export function ShellPage() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col bg-[#0D0D0E]">
-        <div className="flex items-center justify-between border-b border-[#141416] px-[22px] py-[17px]">
-          <button
-            type="button"
-            data-testid="bot-settings-trigger"
-            onClick={() => setPanel("settings")}
-            className="flex min-w-0 items-center gap-3"
-          >
-            {active ? <BotAvatar color={active.color} size={26} /> : null}
-            <span className="min-w-0">
-              <span className="block truncate text-[16px] font-medium text-[#ECECEE]">
-                {active?.name ?? "Select a bot"}
+        <div className="flex items-center justify-between border-b border-[#141416] px-3 py-[17px] md:px-[22px]">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              aria-label={t`Open navigation`}
+              onClick={() => setMobileSidebarOpen(true)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#A8A8AD] hover:bg-[#1B1B1E] md:hidden"
+            >
+              <Menu size={19} strokeWidth={1.7} />
+            </button>
+            <button
+              type="button"
+              data-testid="bot-settings-trigger"
+              onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
+              className="flex min-w-0 items-center gap-3"
+            >
+              {inGroup ? (
+                <GroupAvatar
+                  members={activeSnapshot?.members ?? activeGroup?.members ?? []}
+                  size={26}
+                />
+              ) : active ? (
+                <BotAvatar
+                  color={active.color}
+                  identity={active.id}
+                  size={26}
+                  status={active.status}
+                />
+              ) : null}
+              <span className="min-w-0">
+                <span className="block truncate text-[16px] font-medium text-[#ECECEE]" dir="auto">
+                  {inGroup
+                    ? (activeGroup?.name ?? activeSnapshot?.groupName ?? t`Group`)
+                    : (active?.name ?? t`Select a bot`)}
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          </div>
           <div className="flex items-center gap-1">
-            {active ? (
+            {!inGroup && active ? (
               <button
                 type="button"
-                title={voiceStatus?.ready ? "Call" : "Set up voice to call"}
-                aria-label="Call"
+                title={voiceStatus?.ready ? t`Call` : t`Set up voice to call`}
+                aria-label={t`Call`}
                 onClick={() => {
                   if (!voiceStatus?.ready) {
                     setVoiceOpen(true);
@@ -1230,31 +2357,49 @@ export function ShellPage() {
                 <Phone size={16} strokeWidth={1.6} className="text-[#A8A8AD]" />
               </button>
             ) : null}
-            <button
-              type="button"
-              title="Agent computer"
-              onClick={() => setPanel((p) => (p === "computer" ? null : "computer"))}
-              className="grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-[#1B1B1E]"
-              style={{ background: panel ? "#1B1B1E" : "transparent" }}
-            >
-              <Monitor size={18} strokeWidth={1.6} className="text-[#A8A8AD]" />
-            </button>
+            {!inGroup ? (
+              <button
+                type="button"
+                title={t`Agent computer`}
+                onClick={() => {
+                  const next = panel === "computer" ? null : "computer";
+                  setPanel(next);
+                  if (next === "computer" && active) {
+                    // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
+                    void refreshThread(active.id).catch(() => undefined);
+                  }
+                }}
+                className="grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-[#1B1B1E]"
+                style={{ background: panel ? "#1B1B1E" : "transparent" }}
+              >
+                <Monitor size={18} strokeWidth={1.6} className="text-[#A8A8AD]" />
+              </button>
+            ) : null}
           </div>
         </div>
         <Transcript
+          key={activeSnapshot?.threadId}
           scrollRef={messageScroll}
-          botId={active?.id ?? ""}
-          messages={snapshot?.messages ?? []}
-          olderCursor={snapshot?.olderCursor ?? null}
+          artifactTarget={transcriptArtifactTarget}
+          messages={activeSnapshot?.messages ?? []}
+          olderCursor={activeSnapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
           answerableAskMessageId={answerableAskMessageId}
-          running={Boolean(
-            snapshot?.run && ["running", "queued", "leased"].includes(snapshot.run.status),
-          )}
+          running={transcriptRunning}
+          workingBots={workingBots}
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
+          onReply={setReplyTarget}
+          onJumpToMessage={jumpToReplyMessage}
+          onOpenPeerMessages={(peerBotId) => {
+            setPeerMessagesFocusId(peerBotId);
+            setPeerMessagesOpen(true);
+          }}
+          memberName={resolveTranscriptMemberName}
+          peerBot={resolveTranscriptBot}
           onRefresh={refreshActiveThread}
+          onBotChanged={refreshBots}
           onAddRoutine={addSkillRoutine}
           voiceReady={Boolean(voiceStatus?.ready)}
           speakingMessageId={speakingMessageId}
@@ -1262,12 +2407,13 @@ export function ShellPage() {
         />
         {recordingSkill ? (
           <div className="px-6 pb-2 text-center text-[13px] text-[#E65707]">
-            Teaching in progress — stop teaching before sending a new message.
+            <Trans>Teaching in progress — stop teaching before sending a new message.</Trans>
           </div>
         ) : null}
         <Composer
-          activeName={active?.name}
-          running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
+          key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
+          activeName={inGroup ? (activeGroup?.name ?? activeSnapshot?.groupName) : active?.name}
+          running={composerRunning}
           disabled={Boolean(recordingSkill)}
           pendingAttachments={activePendingAttachments}
           attachmentNotice={attachmentNotice}
@@ -1279,6 +2425,31 @@ export function ShellPage() {
           onRemoveAttachment={removeAttachment}
           onSend={sendMessage}
           onStop={stopRun}
+          replyTarget={activeReplyTarget}
+          replyTargetName={replyTargetName}
+          onClearReply={() => setReplyTarget(null)}
+          mentionTargets={composerMentionTargets}
+          agentSkills={agentSkills}
+          onSlashOpen={refreshAgentSkills}
+          onSlashAction={(action) => {
+            if (action === "chat-settings") {
+              setPanel(inGroup ? "group-settings" : "settings");
+              return;
+            }
+            if (action === "settings-general") {
+              setAccountSettingsFocusUsage(false);
+              setAccountSettingsOpen(true);
+              return;
+            }
+            if (action === "settings-usage") {
+              setAccountSettingsFocusUsage(true);
+              setAccountSettingsOpen(true);
+              void rpc.usage
+                .summary()
+                .then(setUsage)
+                .catch(() => undefined);
+            }
+          }}
           dictating={dictating}
           transcribe={Boolean(voiceStatus?.transcribe)}
           onDictateStart={(onFinal) => {
@@ -1295,46 +2466,66 @@ export function ShellPage() {
       <aside
         data-testid="side-panel"
         data-panel={panel ?? "closed"}
-        className={`relative z-20 flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#0A0A0B] transition-[width] duration-150 ease-out ${
-          panel && active ? "w-[384px] border-l border-[#141416]" : "pointer-events-none w-0"
+        className={`absolute inset-y-0 end-0 z-20 flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#0A0A0B] transition-[width] duration-150 ease-out md:relative ${
+          panel && (active || activeGroup)
+            ? "w-full max-w-[384px] border-s border-[#141416] md:w-[384px] md:max-w-none"
+            : "pointer-events-none w-0"
         }`}
       >
-        {panel && active ? (
-          <div className="rk-scroll h-full w-[384px] overflow-y-auto px-5 py-[17px]">
-            {panel !== "routine" && panel !== "create" ? (
+        {panel && (active || activeGroup) ? (
+          <div className="rk-scroll h-full w-full overflow-y-auto px-5 py-[17px] md:w-[384px]">
+            {panel !== "routine" &&
+            panel !== "create" &&
+            panel !== "create-group" &&
+            panel !== "group-settings" ? (
               <div className="mb-4 flex items-center justify-between">
                 <span className="text-[13.5px] text-[#85858A]">
-                  {computer?.state ?? active.status}
+                  {panel === "settings" ? (
+                    <Trans>Settings</Trans>
+                  ) : active ? (
+                    (computer?.state ?? active.status)
+                  ) : (
+                    <Trans>Group</Trans>
+                  )}
                 </span>
                 <div className="flex gap-3.5">
-                  <button
-                    type="button"
-                    aria-label="Bot settings"
-                    onClick={() => setPanel("settings")}
-                  >
-                    <Settings size={16} strokeWidth={1.7} />
-                  </button>
-                  <button type="button" aria-label="Close panel" onClick={() => setPanel(null)}>
+                  {active ? (
+                    <button
+                      type="button"
+                      aria-label={panel === "settings" ? t`Show computer` : t`Show settings`}
+                      onClick={() => setPanel(panel === "settings" ? "computer" : "settings")}
+                      className={
+                        panel === "settings"
+                          ? "text-[#ECECEE]"
+                          : "text-[#85858A] hover:text-[#ECECEE]"
+                      }
+                    >
+                      <Settings size={16} strokeWidth={1.7} />
+                    </button>
+                  ) : null}
+                  <button type="button" aria-label={t`Close panel`} onClick={() => setPanel(null)}>
                     <X size={16} strokeWidth={1.8} />
                   </button>
                 </div>
               </div>
             ) : null}
-            {panel === "computer" ? (
+            {panel === "computer" && active ? (
               <div>
                 <div className="relative aspect-[16/10] overflow-hidden rounded-[14px] bg-[#0E0E10]">
                   {computerOpen ? (
                     <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
-                      Open in full window
+                      <Trans>Open in full window</Trans>
                     </div>
                   ) : computer?.kind === "desktop" ? (
                     <div className="grid h-full place-items-center px-6 text-center text-sm text-[#6C6C70]">
-                      This bot runs on this computer, not a Linux desktop. Shell and files use your
-                      home folder.
+                      <Trans>
+                        This bot runs on this computer, not a Linux desktop. Shell and files use
+                        your home folder.
+                      </Trans>
                     </div>
                   ) : computer?.state === "running" && embeddedScreenUrl ? (
                     <iframe
-                      title="Bot screen preview"
+                      title={t`Bot screen preview`}
                       src={embeddedScreenUrl}
                       sandbox={screenIframeSandbox(embeddedScreenUrl)}
                       className="h-full w-full border-0 bg-black"
@@ -1342,85 +2533,95 @@ export function ShellPage() {
                       style={{ pointerEvents: "none" }}
                     />
                   ) : (
-                    <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
-                      {computerPlaceholder(
-                        computer?.state,
-                        booting,
-                        computerLabel(computer?.mode, active.name),
+                    <div className="grid h-full place-items-center px-6 text-center text-sm text-[#6C6C70]">
+                      {computersAreUnavailable(bootstrapMe?.sandboxProvider) ? (
+                        <ComputersUnavailableHint />
+                      ) : (
+                        computerPlaceholder(
+                          computer?.state,
+                          booting,
+                          computerLabel(computer?.mode, active.name),
+                        )
                       )}
                     </div>
                   )}
                   <button
                     type="button"
                     className="absolute inset-0 cursor-pointer"
-                    aria-label="Open computer"
+                    aria-label={t`Open computer`}
                     onClick={() => void openComputer()}
                   />
                 </div>
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-[13.5px] text-[#85858A]">
-                    {computer?.busyBotName
-                      ? `${computer.busyBotName} is using it`
-                      : hasControl
-                        ? "You have control"
-                        : computer?.state === "suspended"
-                          ? "Asleep"
-                          : computerLabel(computer?.mode, active.name)}
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="min-w-0 text-[13.5px] text-[#85858A]">
+                    {hasControl
+                      ? t`You have control`
+                      : computerError
+                        ? computerError
+                        : computer?.busyBotName
+                          ? t`${computer.busyBotName} is using it`
+                          : computer?.state === "suspended"
+                            ? t`Asleep`
+                            : computerLabel(computer?.mode, active.name)}
                   </span>
                   {hasControl ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void releaseComputer()}
-                    >
-                      Release
-                    </Button>
+                    <ComputerReleaseActions
+                      takeoverRequested={computer?.takeoverRequested ?? false}
+                      onRelease={releaseComputer}
+                    />
                   ) : (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      disabled={takeoverBlocked}
+                      title={takeoverBlocked ? t`Stop the bot first` : undefined}
                       onClick={() => void openComputer()}
                     >
-                      Take control
+                      <Trans>Take control</Trans>
                     </Button>
                   )}
                 </div>
-                <div className="mt-[30px] mb-3 text-[14px] text-[#85858A]">Routines</div>
-                {activeRoutines.map((routine) => (
-                  <button
-                    key={routine.id}
-                    type="button"
-                    onClick={() => {
-                      setRoutineDraft({
-                        name: routine.name,
-                        prompt: routine.prompt,
-                        schedule: presetFromCron(routine.cron),
-                      });
-                      setEditingRoutine(routine);
-                      setPanel("routine");
+                {computer?.state === "error" ||
+                computer?.state === "stopped" ||
+                (computer?.state === "running" && !embeddedScreenUrl) ? (
+                  <ComputerMaintenanceActions
+                    botId={active.id}
+                    computer={computer}
+                    compact
+                    onChanged={async () => {
+                      await refreshThread(active.id);
                     }}
-                    className="flex w-full items-center gap-3 rounded-[11px] px-2.5 py-2.5 hover:bg-[#121214]"
-                  >
-                    <span className="text-[#E65707]">◷</span>
-                    <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">
-                      {routine.name}
-                    </span>
-                    <span className="text-[13px] text-[#6C6C70]">{formatCron(routine.cron)}</span>
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRoutineDraft({ name: "", prompt: "", schedule: defaultCronPreset() });
+                  />
+                ) : null}
+                <RoutineListHeader
+                  onCreate={() => {
+                    setRoutineDraft(emptyRoutineDraft());
+                    setRoutineWebhookSecret(null);
                     setEditingRoutine(null);
+                    setRoutineError(null);
                     setPanel("routine");
                   }}
-                  className="mt-1 flex items-center gap-2.5 px-2.5 py-2.5 text-[14.5px] text-[#7A7A80]"
-                >
-                  + New routine
-                </button>
+                />
+                {activeRoutines.map((routine) => {
+                  const routineRunning =
+                    snapshot?.run?.routineId === routine.id && isActive(snapshot.run.status);
+                  return (
+                    <RoutineListRow
+                      key={routine.id}
+                      routine={routine}
+                      running={routineRunning}
+                      onOpen={() => {
+                        setRoutineDraft(draftFromRoutine(routine));
+                        setRoutineWebhookSecret(null);
+                        setEditingRoutine(routine);
+                        setRoutineError(null);
+                        setPanel("routine");
+                      }}
+                      onStop={() => void stopRun()}
+                    />
+                  );
+                })}
                 {active ? (
                   <TeachComputerSection
                     botId={active.id}
@@ -1432,10 +2633,11 @@ export function ShellPage() {
                     onStopTeaching={stopTeaching}
                     onAddRoutine={(skill) => {
                       setRoutineDraft({
+                        ...emptyRoutineDraft(),
                         name: skill.name || skill.goal.slice(0, 80),
                         prompt: `Run taught skill: ${skill.name || skill.goal}\n${skill.playbook.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`,
-                        schedule: defaultCronPreset(),
                       });
+                      setRoutineWebhookSecret(null);
                       setEditingRoutine(null);
                       setPanel("routine");
                     }}
@@ -1443,16 +2645,50 @@ export function ShellPage() {
                 ) : null}
               </div>
             ) : null}
+            {panel === "create-group" ? (
+              <CreateGroupForm
+                bots={bots}
+                onCancel={() => setPanel(null)}
+                onCreate={(input) => createGroup(input)}
+              />
+            ) : null}
+            {panel === "group-settings" && activeGroup ? (
+              <GroupSettings
+                key={activeGroup.id}
+                group={activeGroup}
+                bots={bots}
+                onSave={async (input) => {
+                  const updated = await rpc.groups.update({ groupId: activeGroup.id, ...input });
+                  setGroups((current) =>
+                    current.map((group) => (group.id === updated.id ? updated : group)),
+                  );
+                  setPanel(null);
+                  await Promise.all([refreshBots(), refreshGroupThread(activeGroup.id)]).catch(
+                    () => undefined,
+                  );
+                }}
+                onRemove={async () => {
+                  await rpc.groups.remove({ groupId: activeGroup.id });
+                  const remainingGroups = groups.filter((group) => group.id !== activeGroup.id);
+                  setGroups(remainingGroups);
+                  setPanel(null);
+                  navigate(firstThreadRoute(bots, remainingGroups), { replace: true });
+                  await refreshBots().catch(() => undefined);
+                }}
+              />
+            ) : null}
             {panel === "create" ? (
               <CreateBotForm
                 onCancel={() => setPanel(null)}
-                onCreate={(input) => void createBot(input)}
+                onCreate={(input) => createBot(input)}
               />
             ) : null}
-            {panel === "settings" ? (
+            {panel === "settings" && active ? (
               <BotSettings
                 key={active.id}
                 bot={active}
+                computer={computer}
+                memoryProviderConfigured={memoryProviderConfig != null}
                 onSave={async ({ computerMode, ...patch }) => {
                   if (computerMode !== active.computerMode) {
                     await rpc.bots.setComputer({
@@ -1475,182 +2711,257 @@ export function ShellPage() {
                   a.click();
                   URL.revokeObjectURL(url);
                 }}
-                onClear={() => setClearTarget(active)}
+                onClear={() => setClearTarget({ kind: "bot", chat: active })}
+                onComputerChanged={async () => {
+                  await refreshThread(active.id);
+                }}
               />
             ) : null}
-            {panel === "routine" ? (
-              <div>
-                <div className="mb-5 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setPanel("computer")}
-                    className="text-[#9A9AA0]"
-                  >
-                    <ChevronLeft size={18} strokeWidth={1.8} />
-                  </button>
-                  <div className="text-[15.5px] font-medium text-[#F1F1F2]">Routine</div>
-                  <button type="button" onClick={() => setPanel(null)} className="text-[#6C6C70]">
-                    <X size={16} strokeWidth={1.8} />
-                  </button>
-                </div>
-                <label className="text-[14px] text-[#85858A]">
-                  Name
-                  <input
-                    value={routineDraft.name}
-                    onChange={(e) => setRoutineDraft((s) => ({ ...s, name: e.target.value }))}
-                    className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
-                  />
-                </label>
-                <label className="mt-5 block text-[14px] text-[#85858A]">
-                  Instruction
-                  <textarea
-                    value={routineDraft.prompt}
-                    onChange={(e) => setRoutineDraft((s) => ({ ...s, prompt: e.target.value }))}
-                    rows={4}
-                    className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
-                  />
-                </label>
-                <div className="mt-5 text-[14px] text-[#85858A]">
-                  When to run
-                  <Suspense fallback={null}>
-                    <RoutineSchedule
-                      value={routineDraft.schedule}
-                      onChange={(schedule) => setRoutineDraft((s) => ({ ...s, schedule }))}
-                    />
-                  </Suspense>
-                </div>
-                <div className="mt-5 flex items-center gap-3">
-                  <button
-                    type="button"
-                    disabled={savingRoutine || runningRoutine}
-                    onClick={async () => {
-                      if (routineSavePending.current) return;
-                      const targetBotId = active.id;
-                      const targetRoutine = editingRoutine;
-                      if (targetRoutine && targetRoutine.botId !== targetBotId) return;
-                      routineSavePending.current = true;
-                      setSavingRoutine(true);
-                      try {
-                        if (targetRoutine) {
-                          await rpc.routines.update({
-                            routineId: targetRoutine.id,
-                            name: routineDraft.name || "Routine",
-                            prompt: routineDraft.prompt || "Check in.",
-                            cron: cronFromPreset(routineDraft.schedule),
-                          });
-                        } else {
-                          await rpc.routines.create({
-                            botId: targetBotId,
-                            name: routineDraft.name || "Routine",
-                            prompt: routineDraft.prompt || "Check in.",
-                            cron: cronFromPreset(routineDraft.schedule),
-                            timezone: "UTC",
-                            active: true,
-                            notify: true,
-                          });
+            {panel === "routine" && active ? (
+              <RoutineEditor
+                draft={routineDraft}
+                onChange={setRoutineDraft}
+                editing={editingRoutine}
+                timezone={editingRoutine?.timezone ?? localTimezone()}
+                webhook={{
+                  path:
+                    typeof window !== "undefined"
+                      ? `${window.location.origin}/api/v1/bots/${active.id}/webhook`
+                      : `/api/v1/bots/${active.id}/webhook`,
+                  secret: routineWebhookSecret,
+                  configured: active.webhookConfigured || Boolean(routineWebhookSecret),
+                }}
+                saving={savingRoutine}
+                running={runningRoutine}
+                error={routineError}
+                onBack={() => setPanel("computer")}
+                onClose={() => setPanel(null)}
+                onEnsureWebhook={async () => {
+                  const result = await rpc.bots.rotateWebhookSecret({ botId: active.id });
+                  setRoutineWebhookSecret(result.secret);
+                  setBots((current) =>
+                    current.map((bot) =>
+                      bot.id === active.id ? { ...bot, webhookConfigured: true } : bot,
+                    ),
+                  );
+                }}
+                onSave={async () => {
+                  if (routineSavePending.current) return;
+                  const targetBotId = active.id;
+                  const targetRoutine = editingRoutine;
+                  if (targetRoutine && targetRoutine.botId !== targetBotId) return;
+                  if (!routineDraft.schedules.length && !routineDraft.webhookEnabled) {
+                    setRoutineError(t`Add a schedule or webhook trigger`);
+                    return;
+                  }
+                  const saveRequest = ++routineSaveRequest.current;
+                  routineSavePending.current = true;
+                  setSavingRoutine(true);
+                  setRoutineError(null);
+                  try {
+                    if (
+                      routineDraft.webhookEnabled &&
+                      !active.webhookConfigured &&
+                      !routineWebhookSecret
+                    ) {
+                      const rotated = await rpc.bots.rotateWebhookSecret({ botId: targetBotId });
+                      setRoutineWebhookSecret(rotated.secret);
+                      setBots((current) =>
+                        current.map((bot) =>
+                          bot.id === targetBotId ? { ...bot, webhookConfigured: true } : bot,
+                        ),
+                      );
+                    }
+                    const crons = routineDraft.schedules.map(cronFromPreset);
+                    let saved: Routine;
+                    if (targetRoutine) {
+                      const armOneShot = routineNeedsOneShotArm(targetRoutine, crons);
+                      let runAt: string | undefined;
+                      if (armOneShot) {
+                        if (!routineDraft.runAtLocal) {
+                          setRoutineError(t`Add a run time for this one-shot.`);
+                          return;
                         }
-                        if (activeBotId.current !== targetBotId) return;
-                        await refreshThread(targetBotId);
-                        if (activeBotId.current === targetBotId) setPanel("computer");
-                      } finally {
-                        routineSavePending.current = false;
-                        setSavingRoutine(false);
+                        const parsed = new Date(routineDraft.runAtLocal);
+                        if (!Number.isFinite(parsed.getTime()) || parsed.getTime() <= Date.now()) {
+                          setRoutineError(t`Run time must be in the future.`);
+                          return;
+                        }
+                        runAt = parsed.toISOString();
                       }
-                    }}
-                    className="rounded-[11px] bg-[#F1F1EF] px-4 py-2 text-[#17171A] disabled:opacity-40"
-                  >
-                    {savingRoutine ? "Saving…" : "Save"}
-                  </button>
-                  {editingRoutine?.botId === active.id ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={savingRoutine || runningRoutine}
-                        onClick={async () => {
-                          if (routineRunPending.current) return;
-                          const targetBotId = active.id;
-                          const targetRoutine = editingRoutine;
-                          routineRunPending.current = true;
-                          setRunningRoutine(true);
-                          try {
-                            await rpc.routines.testRun({ routineId: targetRoutine.id });
-                            await refreshThread(targetBotId);
-                          } finally {
-                            routineRunPending.current = false;
-                            setRunningRoutine(false);
-                          }
-                        }}
-                        className="rounded-[11px] border border-[#26262A] px-4 py-2 text-[14px] text-[#ECECEE] disabled:opacity-40"
-                      >
-                        {runningRoutine ? "Running…" : "Run now"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={savingRoutine || runningRoutine}
-                        onClick={() => setDeleteRoutineTarget(editingRoutine)}
-                        className="rounded-[11px] px-4 py-2 text-[14px] text-[#FF5364] disabled:opacity-40"
-                      >
-                        Delete routine
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              </div>
+                      saved = await rpc.routines.update({
+                        routineId: targetRoutine.id,
+                        name: routineDraft.name || t`Routine`,
+                        prompt: routineDraft.prompt || t`Check in.`,
+                        crons,
+                        active: armOneShot ? true : routineDraft.active,
+                        webhookEnabled: routineDraft.webhookEnabled,
+                        ...(runAt ? { runAt } : {}),
+                      });
+                    } else {
+                      saved = await rpc.routines.create({
+                        botId: targetBotId,
+                        name: routineDraft.name || t`Routine`,
+                        prompt: routineDraft.prompt || t`Check in.`,
+                        crons,
+                        timezone: localTimezone(),
+                        active: routineDraft.active,
+                        notify: true,
+                        webhookEnabled: routineDraft.webhookEnabled,
+                      });
+                    }
+                    if (
+                      routineSaveRequest.current === saveRequest &&
+                      activeBotId.current === targetBotId
+                    ) {
+                      setEditingRoutine(saved);
+                      setRoutineDraft(draftFromRoutine(saved));
+                    }
+                  } catch (error) {
+                    if (
+                      routineSaveRequest.current !== saveRequest ||
+                      activeBotId.current !== targetBotId
+                    ) {
+                      return;
+                    }
+                    setRoutineError(
+                      error instanceof Error ? error.message : t`Could not save routine`,
+                    );
+                    return;
+                  } finally {
+                    routineSavePending.current = false;
+                    setSavingRoutine(false);
+                  }
+                  if (
+                    routineSaveRequest.current !== saveRequest ||
+                    activeBotId.current !== targetBotId
+                  ) {
+                    return;
+                  }
+                  await refreshThread(targetBotId).catch(() => undefined);
+                }}
+                onTestRun={async () => {
+                  if (routineRunPending.current) return;
+                  const targetBotId = active.id;
+                  const targetRoutine = editingRoutine;
+                  if (!targetRoutine) return;
+                  routineRunPending.current = true;
+                  setRunningRoutine(true);
+                  setRoutineError(null);
+                  try {
+                    await rpc.routines.testRun({ routineId: targetRoutine.id });
+                    await refreshThread(targetBotId);
+                  } catch (error) {
+                    if (activeBotId.current === targetBotId) {
+                      setRoutineError(
+                        error instanceof Error ? error.message : t`Could not run routine`,
+                      );
+                    }
+                  } finally {
+                    routineRunPending.current = false;
+                    setRunningRoutine(false);
+                  }
+                }}
+                onDelete={() => {
+                  if (editingRoutine) {
+                    setDeleteRoutineTarget(editingRoutine);
+                    return;
+                  }
+                  setPanel("computer");
+                }}
+              />
             ) : null}
           </div>
         ) : null}
       </aside>
 
       <Suspense fallback={null}>
-        {contextBot && botMenu ? (
+        {contextChat && botMenu ? (
           <BotContextMenu
-            bot={contextBot}
+            bot={contextChat}
             position={botMenu.position}
             onClose={closeBotMenu}
             sections={botSections}
             onTogglePinned={() => {
               setBotMenu(null);
-              void rpc.bots
-                .update({ botId: contextBot.id, pinned: !contextBot.pinned })
-                .then(() => refreshBots());
+              const request = contextBot
+                ? rpc.bots.update({ botId: contextBot.id, pinned: !contextBot.pinned })
+                : rpc.groups.update({
+                    groupId: contextGroup!.id,
+                    pinned: !contextGroup!.pinned,
+                  });
+              void request.then(() => refreshBots());
             }}
             onToggleUnread={() => {
-              const unread = !contextBot.unread;
+              const unread = !contextChat.unread;
               setBotMenu(null);
-              const request = unread ? markBotUnread(contextBot.id) : markBotRead(contextBot.id);
-              void request.catch(() => undefined);
+              if (contextBot) {
+                const request = unread ? markBotUnread(contextBot.id) : markBotRead(contextBot.id);
+                void request.catch(() => undefined);
+              } else {
+                const request = unread
+                  ? rpc.threads.markUnread({ groupId: contextGroup!.id })
+                  : rpc.threads.markRead({ groupId: contextGroup!.id });
+                void request
+                  .then(() =>
+                    setGroups((current) =>
+                      current.map((group) =>
+                        group.id === contextGroup!.id ? { ...group, unread } : group,
+                      ),
+                    ),
+                  )
+                  .catch(() => undefined);
+              }
             }}
             onMoveToSection={(sectionId) => {
               setBotMenu(null);
-              if (sectionId === contextBot.sectionId) return;
-              void rpc.bots.update({ botId: contextBot.id, sectionId }).then(() => refreshBots());
+              if (sectionId === contextChat.sectionId) return;
+              const request = contextBot
+                ? rpc.bots.update({ botId: contextBot.id, sectionId })
+                : rpc.groups.update({ groupId: contextGroup!.id, sectionId });
+              void request.then(() => refreshBots());
             }}
             onCreateSection={() => {
-              setNewSectionBot(contextBot);
+              setNewSectionTarget(
+                contextBot
+                  ? { kind: "bot", chat: contextBot }
+                  : { kind: "group", chat: contextGroup! },
+              );
               setBotMenu(null);
             }}
             onEdit={() => {
-              navigate(`/app/${contextBot.id}`);
-              setPanel("settings");
+              navigate(contextBot ? `/app/${contextBot.id}` : `/app/g/${contextGroup!.id}`);
+              setPanel(contextBot ? "settings" : "group-settings");
               setBotMenu(null);
             }}
             onDuplicate={() => {
               setBotMenu(null);
-              void rpc.bots.duplicate({ botId: contextBot.id }).then(async (bot) => {
+              const request = contextBot
+                ? rpc.bots.duplicate({ botId: contextBot.id })
+                : rpc.groups.duplicate({ groupId: contextGroup!.id });
+              void request.then(async (chat) => {
                 await refreshBots();
-                navigate(`/app/${bot.id}`);
+                navigate(contextBot ? `/app/${chat.id}` : `/app/g/${chat.id}`);
               });
             }}
             onClear={() => {
-              setClearTarget(contextBot);
+              setClearTarget(
+                contextBot
+                  ? { kind: "bot", chat: contextBot }
+                  : { kind: "group", chat: contextGroup! },
+              );
               setBotMenu(null);
             }}
             onArchive={() => {
               setBotMenu(null);
-              void rpc.bots.archive({ botId: contextBot.id }).then(() => refreshBots(true));
+              const request = contextBot
+                ? rpc.bots.archive({ botId: contextBot.id })
+                : rpc.groups.archive({ groupId: contextGroup!.id });
+              void request.then(() => refreshBots(true));
             }}
             onDelete={() => {
-              setDeleteTarget(contextBot);
+              if (contextBot) setDeleteTarget(contextBot);
+              else setDeleteGroupTarget(contextGroup!);
               setBotMenu(null);
             }}
           />
@@ -1669,13 +2980,31 @@ export function ShellPage() {
           />
         ) : null}
 
-        {newSectionBot ? (
+        {deleteGroupTarget ? (
+          <DeleteItemDialog
+            item={deleteGroupTarget}
+            noun="group"
+            onCancel={() => setDeleteGroupTarget(null)}
+            onConfirm={async () => {
+              await rpc.groups.remove({ groupId: deleteGroupTarget.id });
+              setDeleteGroupTarget(null);
+              setPanel(null);
+              await refreshBots(true);
+            }}
+          />
+        ) : null}
+
+        {newSectionTarget ? (
           <NewBotSectionDialog
-            bot={newSectionBot}
-            onCancel={() => setNewSectionBot(null)}
+            bot={newSectionTarget.chat}
+            onCancel={() => setNewSectionTarget(null)}
             onConfirm={async (name) => {
-              await rpc.botSections.create({ botId: newSectionBot.id, name });
-              setNewSectionBot(null);
+              await rpc.botSections.create(
+                newSectionTarget.kind === "bot"
+                  ? { botId: newSectionTarget.chat.id, name }
+                  : { groupId: newSectionTarget.chat.id, name },
+              );
+              setNewSectionTarget(null);
               await refreshBots();
             }}
           />
@@ -1683,15 +3012,22 @@ export function ShellPage() {
 
         {clearTarget ? (
           <ClearConversationDialog
-            bot={clearTarget}
+            bot={clearTarget.chat}
             onCancel={() => setClearTarget(null)}
             onConfirm={async () => {
-              await rpc.threads.clear({ botId: clearTarget.id });
-              if (active?.id === clearTarget.id) {
+              await rpc.threads.clear(
+                clearTarget.kind === "bot"
+                  ? { botId: clearTarget.chat.id }
+                  : { groupId: clearTarget.chat.id },
+              );
+              if (
+                (clearTarget.kind === "bot" && active?.id === clearTarget.chat.id) ||
+                (clearTarget.kind === "group" && activeGroup?.id === clearTarget.chat.id)
+              ) {
                 expandedHistoryThread.current = null;
                 pinnedAroundRef.current = null;
                 historyEpoch.current += 1;
-                setSnapshot((current) =>
+                updateSnapshot((current) =>
                   current ? { ...current, messages: [], olderCursor: null, run: null } : current,
                 );
               }
@@ -1702,8 +3038,9 @@ export function ShellPage() {
         ) : null}
 
         {deleteRoutineTarget ? (
-          <DeleteRoutineDialog
-            routine={deleteRoutineTarget}
+          <DeleteItemDialog
+            item={deleteRoutineTarget}
+            noun="routine"
             onCancel={() => setDeleteRoutineTarget(null)}
             onConfirm={async () => {
               const target = deleteRoutineTarget;
@@ -1719,14 +3056,51 @@ export function ShellPage() {
 
         {pluginsOpen ? (
           <PluginsOverlay
+            activeBotId={activeBotId.current}
             onClose={() => setPluginsOpen(false)}
-            canManage={Boolean(bootstrapMe?.isDeploymentOwner)}
+            onOpenMcp={() => {
+              setPluginsOpen(false);
+              setMcpOpen(true);
+            }}
           />
         ) : null}
+        {mcpOpen ? <McpServersOverlay onClose={() => setMcpOpen(false)} /> : null}
       </Suspense>
 
       <Suspense fallback={null}>
+        {accountSettingsOpen ? (
+          <AccountSettingsOverlay
+            name={userName}
+            email={session.data?.user.email}
+            usage={usage}
+            focusUsage={accountSettingsFocusUsage}
+            avatarStyle={bootstrapMe?.avatarStyle ?? "robot"}
+            isDeploymentOwner={bootstrapMe?.isDeploymentOwner === true}
+            sandboxProvider={bootstrapMe?.sandboxProvider}
+            onAvatarStyleChange={async (avatarStyle) => {
+              const nextMe = await rpc.preferences.update({ avatarStyle });
+              setBootstrapMe(nextMe);
+            }}
+            onClose={() => {
+              setAccountSettingsOpen(false);
+              setAccountSettingsFocusUsage(false);
+            }}
+          />
+        ) : null}
         {modelsOpen ? <ModelSettingsOverlay onClose={() => setModelsOpen(false)} /> : null}
+        {peerMessagesOpen && active ? (
+          <PeerMessagesOverlay
+            botId={active.id}
+            botName={active.name}
+            messages={activeSnapshot?.messages ?? []}
+            olderCursor={activeSnapshot?.olderCursor ?? null}
+            initialPeerBotId={peerMessagesFocusId}
+            onClose={() => {
+              setPeerMessagesOpen(false);
+              setPeerMessagesFocusId(null);
+            }}
+          />
+        ) : null}
         {voiceOpen ? (
           <VoiceSettingsOverlay
             onClose={() => {
@@ -1743,7 +3117,7 @@ export function ShellPage() {
             botId={active.id}
             botName={active.name}
             transcribe={Boolean(voiceStatus?.transcribe)}
-            snapshot={snapshot}
+            snapshot={activeSnapshot}
             onSend={sendMessage}
             onFollowUp={followUpMessage}
             onAnswer={answerMessage}
@@ -1752,10 +3126,23 @@ export function ShellPage() {
         ) : null}
       </Suspense>
 
+      <Suspense fallback={null}>
+        {memorySettingsOpen ? (
+          <MemorySettingsOverlay
+            onClose={() => setMemorySettingsOpen(false)}
+            config={memoryProviderConfig}
+            onConfigChange={(config) => {
+              memoryProviderConfigRevision.current += 1;
+              setMemoryProviderConfig(config);
+            }}
+          />
+        ) : null}
+      </Suspense>
+
       {booting ? (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-[22px] bg-[rgba(4,4,5,.96)]">
           <div className="text-[19px] font-medium text-[#F1F1F2]">
-            Booting up {active?.name}’s computer
+            <Trans>Booting up {active?.name}’s computer</Trans>
           </div>
           <div className="h-[5px] w-[min(420px,70%)] overflow-hidden rounded-full bg-[#232327]">
             <div className="h-full w-2/3 rounded-full bg-[#F1F1EF]" />
@@ -1765,7 +3152,12 @@ export function ShellPage() {
         <div className="absolute inset-0 z-30 flex flex-col bg-[#050506]">
           <div className="flex items-center justify-between gap-4 border-b border-[#171719] px-[18px] py-3.5">
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <BotAvatar color={active.color} size={28} />
+              <BotAvatar
+                color={active.color}
+                identity={active.id}
+                size={28}
+                status={active.status}
+              />
               {recordingSkill ? (
                 <TeachRecordingChrome
                   recording={recordingSkill}
@@ -1774,58 +3166,80 @@ export function ShellPage() {
                   variant="overlay"
                 />
               ) : (
-                <span className="truncate text-[15.5px] font-medium text-[#ECECEE]">
+                <span className="truncate text-[15.5px] font-medium text-[#ECECEE]" dir="auto">
                   {computerLabel(computer?.mode, active.name)}
                 </span>
               )}
               {!recordingSkill && hasControl ? (
                 <span className="rounded-full bg-[rgba(48,162,75,.14)] px-[11px] py-1 text-[13px] text-[#4ECB71]">
-                  You have control
+                  <Trans>You have control</Trans>
                 </span>
               ) : null}
             </div>
             <div className="flex items-center gap-3">
-              {recordingSkill ? (
-                <TeachStopButton busy={teachBusy} onStop={stopTeaching} />
-              ) : hasControl ? (
+              {composerRunning ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void releaseComputer()}
+                  aria-label={t`Stop`}
+                  data-testid="computer-overlay-stop"
+                  onClick={() => void stopRun()}
                 >
-                  Release
+                  <Trans>Stop</Trans>
                 </Button>
+              ) : null}
+              {recordingSkill ? (
+                <TeachStopButton busy={teachBusy} onStop={stopTeaching} />
+              ) : hasControl ? (
+                <ComputerReleaseActions
+                  takeoverRequested={computer?.takeoverRequested ?? false}
+                  onRelease={releaseComputer}
+                />
               ) : (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void bootComputer({ takeControl: true, overlay: false })}
+                  disabled={takeoverBlocked}
+                  title={takeoverBlocked ? t`Stop the bot first` : undefined}
+                  onClick={() =>
+                    void bootComputer({ takeControl: true, overlay: false }).catch(() => undefined)
+                  }
                 >
-                  Take control
+                  <Trans>Take control</Trans>
                 </Button>
               )}
               <button
                 type="button"
                 className="text-[16px] text-[#85858A] hover:text-[#ECECEE]"
-                aria-label="Close computer"
+                aria-label={t`Close computer`}
                 onClick={() => setComputerOpen(false)}
               >
                 <X size={16} strokeWidth={1.8} />
               </button>
             </div>
           </div>
+          {sendError ? (
+            <div
+              role="alert"
+              className="border-b border-[#5A2A2A] bg-[#2A1717] px-[18px] py-2 text-[13px] text-[#F1A8A8]"
+            >
+              {sendError}
+            </div>
+          ) : null}
           <div className="relative min-h-0 flex-1 bg-[#0E0E10]">
             {computer?.kind === "desktop" ? (
               <div className="grid h-full place-items-center px-8 text-center text-sm text-[#6C6C70]">
-                This bot runs on this computer. There is no separate Linux desktop. Ask it to use
-                the shell; working directories under your home folder are allowed.
+                <Trans>
+                  This bot runs on this computer. There is no separate Linux desktop. Ask it to use
+                  the shell; working directories under your home folder are allowed.
+                </Trans>
               </div>
             ) : computer?.state === "running" && embeddedScreenUrl ? (
               <>
                 <iframe
-                  title="Bot screen"
+                  title={t`Bot screen`}
                   src={embeddedScreenUrl}
                   sandbox={screenIframeSandbox(embeddedScreenUrl)}
                   className="h-full w-full border-0 bg-black"
@@ -1847,7 +3261,7 @@ export function ShellPage() {
             ) : (
               <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
                 {computer?.state === "suspended"
-                  ? "Computer is asleep"
+                  ? t`Computer is asleep`
                   : computerLabel(computer?.mode, active.name)}
               </div>
             )}
@@ -1856,83 +3270,246 @@ export function ShellPage() {
       ) : null}
     </div>
   );
+
+  return (
+    <AvatarStyleProvider value={bootstrapMe?.avatarStyle ?? "robot"}>{shell}</AvatarStyleProvider>
+  );
 }
 
 const Transcript = memo(function Transcript({
   scrollRef,
-  botId,
+  artifactTarget,
   messages,
   olderCursor,
   loadingOlder,
   answerableAskMessageId,
   running,
+  workingBots,
   onLoadOlder,
   onOpenBot,
   onAnswer,
+  onReply,
+  onJumpToMessage,
+  onOpenPeerMessages,
+  memberName,
+  peerBot,
   onRefresh,
+  onBotChanged,
   onAddRoutine,
   voiceReady,
   speakingMessageId,
   onSpeak,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
-  botId: string;
+  artifactTarget: ArtifactTarget;
   messages: ThreadMessage[];
   olderCursor: number | null;
   loadingOlder: boolean;
   answerableAskMessageId: string | null;
   running: boolean;
+  workingBots: GroupAvatarMember[];
   onLoadOlder: () => void | Promise<void>;
   onOpenBot: (botId: string) => void;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  onReply: (message: ThreadMessage) => void;
+  onJumpToMessage: (messageId: string) => void;
+  onOpenPeerMessages: (peerBotId: string) => void;
+  memberName?: (botId: string | undefined) => string | undefined;
+  peerBot: (botId: string) => { color: string; status?: string } | undefined;
   onRefresh: () => Promise<void>;
+  onBotChanged: () => Promise<void>;
   onAddRoutine: (name: string, prompt: string) => void;
   voiceReady: boolean;
   speakingMessageId: string | null;
   onSpeak: (message: ThreadMessage) => void;
 }) {
+  const { t } = useLingui();
+  const [atEnd, setAtEnd] = useState(true);
+  const following = useRef(true);
+  const autoScrolling = useRef(false);
+  const lastScrollTop = useRef<number | null>(null);
+  const autoScrollTimer = useRef<number | undefined>(undefined);
+  const jumpButtonRef = useRef<HTMLButtonElement>(null);
+  const messageById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
+  const workingBotName = workingBots.length === 1 ? workingBots[0]?.name : undefined;
+  const workingLabel =
+    workingBotName != null && workingBotName !== ""
+      ? t`${workingBotName} is working`
+      : t`Bots are working`;
+  const snapToEnd = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    following.current = true;
+    autoScrolling.current = false;
+    setAtEnd(true);
+    element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+  }, [scrollRef]);
+
+  const jumpToLatest = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    following.current = true;
+    autoScrolling.current = !reducedMotion;
+    setAtEnd(true);
+    element.scrollTo({
+      top: element.scrollHeight,
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+    window.clearTimeout(autoScrollTimer.current);
+    // Fallback only: onScroll clears autoScrolling once near-end is reached.
+    autoScrollTimer.current = window.setTimeout(
+      () => {
+        autoScrolling.current = false;
+      },
+      reducedMotion ? 0 : 2_000,
+    );
+  }, [scrollRef]);
+
+  useLayoutEffect(() => {
+    if (following.current) snapToEnd();
+  }, [messages, running, snapToEnd]);
+
+  useLayoutEffect(() => {
+    const button = jumpButtonRef.current;
+    if (atEnd && button && document.activeElement === button) {
+      button.blur();
+    }
+  }, [atEnd]);
+
+  const loadOlder = useCallback(() => {
+    const wasFollowing = following.current;
+    // Prepend must not race the messages-driven snap-to-end follow path.
+    following.current = false;
+    autoScrolling.current = false;
+    const pending = onLoadOlder();
+    if (!pending) return;
+    return Promise.resolve(pending).catch((error) => {
+      const element = scrollRef.current;
+      if (wasFollowing && element && transcriptIsNearEnd(element)) {
+        following.current = true;
+        setAtEnd(true);
+      }
+      throw error;
+    });
+  }, [onLoadOlder, scrollRef]);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(autoScrollTimer.current);
+    },
+    [],
+  );
+
   return (
-    <div
-      ref={scrollRef}
-      data-testid="transcript"
-      className="rk-scroll flex flex-1 flex-col gap-[13px] overflow-y-auto px-7 py-6"
-    >
-      {olderCursor != null ? (
-        <button
-          type="button"
-          disabled={loadingOlder}
-          onClick={() => void onLoadOlder()}
-          className="self-center rounded-lg px-3 py-1.5 text-[13px] text-[#85858A] hover:bg-[#1A1A1D] hover:text-[#C9C9CE] disabled:opacity-50"
-        >
-          {loadingOlder ? "Loading…" : "Load earlier messages"}
-        </button>
-      ) : null}
-      {messages.map((message) => (
-        <div key={message.id} data-message-id={message.id}>
-          <MessageView
-            botId={botId}
-            message={message}
-            canAnswer={message.id === answerableAskMessageId}
-            onOpenBot={onOpenBot}
-            onAnswer={onAnswer}
-            onRefresh={onRefresh}
-            onAddRoutine={onAddRoutine}
-            voiceReady={voiceReady}
-            speaking={speakingMessageId === message.id}
-            onSpeak={() => onSpeak(message)}
-          />
-        </div>
-      ))}
-      {running ? (
-        <div className="flex justify-start">
-          <div
-            className="rounded-[20px] bg-[#1A1A1D] px-[18px] py-[13px] text-[14.5px] text-[#85858A]"
-            style={{ animation: "rkPulse 1.2s ease-in-out infinite" }}
+    <div className="relative flex min-h-0 flex-1">
+      <div
+        ref={scrollRef}
+        data-testid="transcript"
+        onPointerDown={(event) => {
+          lastScrollTop.current = event.currentTarget.scrollTop;
+          autoScrolling.current = false;
+          following.current = false;
+        }}
+        onTouchStart={(event) => {
+          lastScrollTop.current = event.currentTarget.scrollTop;
+          autoScrolling.current = false;
+          following.current = false;
+        }}
+        onWheel={(event) => {
+          if (event.deltaY < 0) {
+            lastScrollTop.current = event.currentTarget.scrollTop;
+            autoScrolling.current = false;
+            following.current = false;
+          }
+        }}
+        onScroll={(event) => {
+          const scrolledDown = transcriptMovedDown(
+            lastScrollTop.current,
+            event.currentTarget.scrollTop,
+          );
+          lastScrollTop.current = event.currentTarget.scrollTop;
+          const nearEnd = transcriptIsNearEnd(event.currentTarget);
+          setAtEnd(nearEnd);
+          if (nearEnd) {
+            if (scrolledDown) following.current = true;
+            if (autoScrolling.current) {
+              autoScrolling.current = false;
+              window.clearTimeout(autoScrollTimer.current);
+            }
+          } else if (!autoScrolling.current) {
+            following.current = false;
+          }
+        }}
+        className="rk-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-5 md:px-7 md:py-6"
+      >
+        {olderCursor != null ? (
+          <button
+            type="button"
+            disabled={loadingOlder}
+            onClick={() => void loadOlder()}
+            className="self-center rounded-lg px-3 py-1.5 text-[13px] text-[#85858A] hover:bg-[#1A1A1D] hover:text-[#C9C9CE] disabled:opacity-50"
           >
-            working…
+            {loadingOlder ? t`Loading…` : t`Load earlier messages`}
+          </button>
+        ) : null}
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            data-message-id={message.id}
+            className="group/message relative pt-9 hover:z-20"
+          >
+            <MessageHoverActions message={message} onReply={onReply} />
+            <MessageView
+              artifactTarget={artifactTarget}
+              message={message}
+              canAnswer={message.id === answerableAskMessageId}
+              onOpenBot={onOpenBot}
+              onOpenPeerMessages={onOpenPeerMessages}
+              onAnswer={onAnswer}
+              speakerName={message.role === "bot" ? memberName?.(message.botId) : undefined}
+              memberName={memberName}
+              peerBot={peerBot}
+              replyPreview={
+                message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined
+              }
+              replyToMessageId={message.replyToMessageId}
+              onJumpToMessage={onJumpToMessage}
+              onRefresh={onRefresh}
+              onBotChanged={onBotChanged}
+              onAddRoutine={onAddRoutine}
+              voiceReady={voiceReady}
+              speaking={speakingMessageId === message.id}
+              onSpeak={() => onSpeak(message)}
+            />
           </div>
-        </div>
-      ) : null}
+        ))}
+        {running &&
+        !messages.some(
+          (message) =>
+            message.id.startsWith("progress:") &&
+            message.blocks[0]?.kind === "progress" &&
+            message.blocks[0].text,
+        ) ? (
+          <ActiveBotGlyph bots={workingBots} label={workingLabel} />
+        ) : null}
+      </div>
+      <button
+        ref={jumpButtonRef}
+        type="button"
+        aria-label={t`Jump to latest`}
+        aria-hidden={atEnd}
+        tabIndex={atEnd ? -1 : 0}
+        onClick={jumpToLatest}
+        className={`absolute bottom-4 left-1/2 z-20 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-[#303034] bg-[#1A1A1D]/95 text-[#C9C9CE] shadow-[0_8px_24px_rgba(0,0,0,.45)] backdrop-blur transition-[opacity,transform,background-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)] hover:bg-[#242428] motion-reduce:transition-none ${
+          atEnd ? "pointer-events-none translate-y-2 opacity-0" : "translate-y-0 opacity-100"
+        }`}
+      >
+        <ArrowDown size={17} strokeWidth={1.8} />
+      </button>
     </div>
   );
 });
@@ -1951,6 +3528,13 @@ const Composer = memo(function Composer({
   onRemoveAttachment,
   onSend,
   onStop,
+  replyTarget,
+  replyTargetName,
+  onClearReply,
+  mentionTargets,
+  agentSkills,
+  onSlashOpen,
+  onSlashAction,
   dictating,
   transcribe,
   onDictateStart,
@@ -1967,28 +3551,170 @@ const Composer = memo(function Composer({
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachmentPick: (files: FileList | null) => void | Promise<void>;
   onRemoveAttachment: (attachment: PendingAttachment) => void;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, mentions?: ComposerMention[]) => Promise<void>;
   onStop: () => Promise<void>;
+  replyTarget?: ThreadMessage | null;
+  replyTargetName?: string;
+  onClearReply?: () => void;
+  mentionTargets?: ComposerMention[];
+  agentSkills?: AgentSkillCatalogEntry[];
+  onSlashOpen?: () => void;
+  onSlashAction?: (action: SlashActionId) => void;
   dictating: boolean;
   transcribe: boolean;
   onDictateStart: (onFinal: (text: string) => void) => void;
   onDictateStop: () => void;
 }) {
+  const { t } = useLingui();
   const [draft, setDraft] = useState("");
-  const canSend = draft.trim().length > 0 || pendingAttachments.length > 0;
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<AgentSkillCatalogEntry | null>(null);
+  const [selectedMentions, setSelectedMentions] = useState<ComposerMention[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const canSend =
+    draft.trim().length > 0 ||
+    selectedSkill !== null ||
+    selectedMentions.length > 0 ||
+    pendingAttachments.length > 0;
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    function syncHeight() {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.style.height = "0px";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+
+    syncHeight();
+    let lastWidth = el.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const width = textarea.getBoundingClientRect().width;
+      if (width === lastWidth) return;
+      lastWidth = width;
+      syncHeight();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [draft]);
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    const mentionMatch = /(?:^|\s)@([\w-]*)$/.exec(value);
+    setMentionQuery(mentionMatch ? (mentionMatch[1] ?? "") : null);
+    // `/` only at the start of the draft so forced skills expand (`Use skill:` / `/Name` prefix).
+    const slashMatch = selectedSkill === null ? /^\/([^\n]*)$/.exec(value) : null;
+    const nextSlash = slashMatch ? (slashMatch[1] ?? "") : null;
+    if (nextSlash !== null && slashQuery === null) onSlashOpen?.();
+    setSlashQuery(nextSlash);
+  }
+
+  function insertMention(mention: ComposerMention) {
+    setDraft((current) => current.replace(/@([\w-]*)$/, ""));
+    setMentionQuery(null);
+    setSelectedMentions((current) =>
+      current.some((selected) => mentionChipKey(selected) === mentionChipKey(mention))
+        ? current
+        : [...current, mention],
+    );
+  }
+
+  function insertSkill(skill: AgentSkillCatalogEntry) {
+    setSelectedSkill(skill);
+    setDraft("");
+    setSlashQuery(null);
+  }
+
+  function runSlashAction(action: SlashActionId) {
+    setDraft("");
+    setSlashQuery(null);
+    onSlashAction?.(action);
+  }
+
+  function removeLastChip() {
+    if (selectedMentions.length > 0) {
+      setSelectedMentions((current) => current.slice(0, -1));
+      return;
+    }
+    if (selectedSkill) setSelectedSkill(null);
+  }
+
+  const mentionOptions = useMemo(() => {
+    if (mentionQuery === null || !mentionTargets?.length) return [];
+    const query = mentionQuery.trim().toLowerCase();
+    return mentionTargets
+      .filter((target) => !query || target.name.toLowerCase().startsWith(query))
+      .slice(0, 10);
+  }, [mentionQuery, mentionTargets]);
+
+  const slashSkillOptions = useMemo(() => {
+    if (slashQuery === null) return [];
+    const query = slashQuery.trim().toLowerCase();
+    const skills = agentSkills ?? [];
+    return skills
+      .filter((skill) => {
+        if (!query) return true;
+        return (
+          skill.name.toLowerCase().includes(query) ||
+          skill.description.toLowerCase().includes(query)
+        );
+      })
+      .slice(0, 8);
+  }, [agentSkills, slashQuery]);
+
+  const slashActionOptions = useMemo(() => {
+    if (slashQuery === null) return [];
+    const query = slashQuery.trim().toLowerCase();
+    return SLASH_ACTIONS.filter((action) => !query || action.label.toLowerCase().includes(query));
+  }, [slashQuery]);
+
+  const showSlashPicker =
+    slashQuery !== null &&
+    mentionQuery === null &&
+    (slashSkillOptions.length > 0 || slashActionOptions.length > 0);
 
   function send() {
     if (!canSend || sending || disabled) return;
-    const text = draft;
+    const text = serializeComposerPrompt(draft, selectedSkill, selectedMentions);
     setDraft("");
-    void onSend(text);
+    setMentionQuery(null);
+    setSlashQuery(null);
+    setSelectedSkill(null);
+    const mentions = selectedMentions;
+    setSelectedMentions([]);
+    void onSend(text, mentions);
   }
 
+  const showComposerPlaceholder =
+    draft.length === 0 && selectedSkill === null && selectedMentions.length === 0;
+  const replyName = replyTarget ? (replyTargetName ?? previewMessageText(replyTarget)) : "";
+
   return (
-    <div className="px-6 pb-6 pt-3">
+    <div className="relative z-30 px-3 pb-4 pt-3 md:px-6 md:pb-6">
       {sendError || dictationError ? (
         <div className="mb-3 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#F1A8A8]">
           {sendError ?? dictationError}
+        </div>
+      ) : null}
+      {replyTarget ? (
+        <div
+          data-testid="reply-chip"
+          className="mb-2 flex items-center gap-2 rounded-full border border-[#26262A] bg-[#17171A] px-3 py-1.5 text-[13px] text-[#C9C9CE]"
+        >
+          <span className="min-w-0 flex-1 truncate text-[#85858A]">{t`Replying to ${replyName}`}</span>
+          <button
+            type="button"
+            aria-label={t`Cancel reply`}
+            onClick={onClearReply}
+            className="shrink-0 text-[#85858A] hover:text-[#ECECEE]"
+          >
+            <X size={13} strokeWidth={2} />
+          </button>
         </div>
       ) : null}
       {attachmentNotice ? (
@@ -2012,10 +3738,12 @@ const Composer = memo(function Composer({
               ) : (
                 <Paperclip size={14} strokeWidth={1.8} />
               )}
-              <span className="max-w-[180px] truncate">{attachment.file.name}</span>
+              <span className="max-w-[180px] truncate" dir="auto">
+                {attachment.file.name}
+              </span>
               <button
                 type="button"
-                aria-label={`Remove ${attachment.file.name}`}
+                aria-label={t`Remove ${attachment.file.name}`}
                 onClick={() => onRemoveAttachment(attachment)}
                 className="text-[#85858A] hover:text-[#ECECEE]"
               >
@@ -2025,7 +3753,76 @@ const Composer = memo(function Composer({
           ))}
         </div>
       ) : null}
-      <div className="flex items-center gap-3.5 rounded-full border border-[#202023] bg-[#131315] py-[9px] pr-2.5 pl-3">
+      {mentionOptions.length ? (
+        <div
+          data-testid="mention-picker"
+          className="mb-2 overflow-hidden rounded-[14px] border border-[#26262A] bg-[#17171A]"
+        >
+          {mentionOptions.map((mention) => (
+            <button
+              key={mentionChipKey(mention)}
+              type="button"
+              aria-label={t`@${mention.name}`}
+              onClick={() => insertMention(mention)}
+              className="flex w-full items-start gap-3 px-4 py-2.5 text-start hover:bg-[#1F1F22]"
+            >
+              <MentionOptionIcon mention={mention} />
+              <span className="min-w-0">
+                <span dir="auto" className="block text-[14px] text-[#ECECEE]">
+                  @{mention.name}
+                </span>
+                {mention.subtitle ? (
+                  <span dir="auto" className="block truncate text-[12.5px] text-[#85858A]">
+                    {mention.subtitle}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {showSlashPicker ? (
+        <div
+          data-testid="slash-picker"
+          className="mb-2 overflow-hidden rounded-[14px] border border-[#26262A] bg-[#17171A]"
+        >
+          {slashSkillOptions.map((skill) => (
+            <button
+              key={skill.id}
+              type="button"
+              aria-label={t`Skill ${skill.name}`}
+              onClick={() => insertSkill(skill)}
+              className="flex w-full items-start gap-3 px-4 py-2.5 text-start hover:bg-[#1F1F22]"
+            >
+              <Box size={16} strokeWidth={1.7} className="mt-0.5 shrink-0 text-[#9A9AA0]" />
+              <span className="min-w-0">
+                <span dir="auto" className="block text-[14px] text-[#ECECEE]">
+                  {skill.name}
+                </span>
+                <span dir="auto" className="block truncate text-[12.5px] text-[#85858A]">
+                  {truncateSlashDescription(skill.description)}
+                </span>
+              </span>
+            </button>
+          ))}
+          {slashActionOptions.map((action) => {
+            const label = slashActionLabel(action.id);
+            return (
+              <button
+                key={action.id}
+                type="button"
+                aria-label={label}
+                onClick={() => runSlashAction(action.id)}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-start hover:bg-[#1F1F22]"
+              >
+                <Settings size={16} strokeWidth={1.7} className="shrink-0 text-[#9A9AA0]" />
+                <span className="text-[14px] text-[#ECECEE]">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <div className="flex items-end gap-3.5 rounded-full border border-[#202023] bg-[#131315] py-[9px] pe-2.5 ps-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -2036,7 +3833,7 @@ const Composer = memo(function Composer({
         />
         <button
           type="button"
-          aria-label="Attach file"
+          aria-label={t`Attach file`}
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
           className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[#9A9AA0] disabled:opacity-40"
@@ -2045,7 +3842,7 @@ const Composer = memo(function Composer({
         </button>
         <button
           type="button"
-          aria-label={dictating ? "Stop dictation" : "Dictate"}
+          aria-label={dictating ? t`Stop dictation` : t`Dictate`}
           onMouseDown={(event) => {
             event.preventDefault();
             onDictateStart((text) => setDraft((current) => `${current} ${text}`.trim()));
@@ -2064,30 +3861,96 @@ const Composer = memo(function Composer({
               ? "border-[#4ECB71] bg-[rgba(48,162,75,.16)] text-[#4ECB71]"
               : "border-[#26262A] text-[#9A9AA0]"
           }`}
-          title={transcribe ? "Hold to talk" : "Hold to talk (on-device dictation)"}
+          title={transcribe ? t`Hold to talk` : t`Hold to talk (on-device dictation)`}
         >
           <Mic size={16} strokeWidth={1.8} />
         </button>
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              send();
+        <div className="flex min-w-0 flex-1 flex-wrap items-end gap-1.5">
+          {selectedSkill ? (
+            <span
+              data-testid="skill-chip"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[#1C1C1F] px-2.5 py-1 text-[13px] text-[#ECECEE]"
+            >
+              <Box size={13} strokeWidth={1.7} className="shrink-0 text-[#B0B0B6]" />
+              <span dir="auto" className="truncate">
+                {selectedSkill.name}
+              </span>
+              <button
+                type="button"
+                aria-label={t`Remove skill ${selectedSkill.name}`}
+                onClick={() => setSelectedSkill(null)}
+                className="text-[#85858A] hover:text-[#ECECEE]"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            </span>
+          ) : null}
+          {selectedMentions.map((mention) => (
+            <span
+              key={mentionChipKey(mention)}
+              data-testid="mention-chip"
+              data-mention-kind={mention.kind}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[#1C1C1F] px-2.5 py-1 text-[13px] text-[#ECECEE]"
+            >
+              <MentionChipIcon mention={mention} />
+              <span dir="auto" className="truncate">
+                {mention.name}
+              </span>
+              <button
+                type="button"
+                aria-label={t`Remove mention ${mention.name}`}
+                onClick={() =>
+                  setSelectedMentions((current) =>
+                    current.filter(
+                      (selected) => mentionChipKey(selected) !== mentionChipKey(mention),
+                    ),
+                  )
+                }
+                className="text-[#85858A] hover:text-[#ECECEE]"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            </span>
+          ))}
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(event) => updateDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Backspace" &&
+                draft.length === 0 &&
+                (selectedSkill !== null || selectedMentions.length > 0)
+              ) {
+                event.preventDefault();
+                removeLastChip();
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                send();
+              }
+            }}
+            disabled={disabled}
+            placeholder={
+              showComposerPlaceholder
+                ? activeName
+                  ? t`Message ${activeName}`
+                  : t`Message…`
+                : undefined
             }
-          }}
-          disabled={disabled}
-          placeholder={activeName ? `Message ${activeName}` : "Message…"}
-          aria-label={activeName ? `Message ${activeName}` : "Message"}
-          name="chat-message"
-          autoComplete="off"
-          className="flex-1 bg-transparent text-[15.5px] text-[#E9E9EA] outline-none disabled:opacity-40"
-        />
+            aria-label={activeName ? t`Message ${activeName}` : t`Message`}
+            name="chat-message"
+            autoComplete="off"
+            dir="auto"
+            rows={1}
+            className="max-h-32 min-h-[24px] min-w-[8rem] flex-1 resize-none overflow-y-auto bg-transparent py-0.5 text-[15.5px] leading-6 text-[#E9E9EA] outline-none disabled:opacity-40"
+          />
+        </div>
         {running ? (
           <button
             type="button"
-            aria-label="Stop"
+            aria-label={t`Stop`}
             onClick={() => void onStop()}
             className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A]"
           >
@@ -2096,7 +3959,7 @@ const Composer = memo(function Composer({
         ) : (
           <button
             type="button"
-            aria-label="Send"
+            aria-label={t`Send`}
             disabled={sending || !canSend || disabled}
             onClick={send}
             className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A] disabled:opacity-50"
@@ -2109,57 +3972,364 @@ const Composer = memo(function Composer({
   );
 });
 
-function applyThreadEvent(
-  event: ProductEvent,
-  setSnapshot: Dispatch<SetStateAction<ThreadSnapshot | null>>,
-  setComputer: Dispatch<SetStateAction<ComputerStatus | null>>,
-) {
-  if (isThreadSnapshotEvent(event) || event.type === "agent.tool.called") {
-    setSnapshot((prev) => reduceThreadSnapshot(prev, event));
-  }
-  if (isComputerStatusEvent(event)) {
-    setComputer((prev) => reduceComputerStatus(prev, event));
+function slashActionLabel(id: SlashActionId) {
+  switch (id) {
+    case "chat-settings":
+      return t`Chat Settings`;
+    case "settings-general":
+      return t`Settings: General`;
+    case "settings-usage":
+      return t`Settings: Usage`;
   }
 }
 
-function latestAnswerableAskMessageId(snapshot: ThreadSnapshot | null): string | null {
-  if (snapshot?.run?.status !== "waiting_input") return null;
-  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
-    const message = snapshot.messages[index];
-    if (message?.runId !== snapshot.run.id) continue;
-    if (message.blocks.some((block) => block.kind === "ask" && block.status !== "answered")) {
-      return message.id;
-    }
+function MentionOptionIcon({ mention }: { mention: ComposerMention }) {
+  if (mention.kind === "routine") {
+    return <Clock size={16} strokeWidth={1.7} className="mt-0.5 shrink-0 text-[#9A9AA0]" />;
   }
-  return null;
+  if (mention.kind === "connector") {
+    return <Puzzle size={16} strokeWidth={1.7} className="mt-0.5 shrink-0 text-[#9A9AA0]" />;
+  }
+  if (mention.kind === "group") {
+    return (
+      <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[#2A2A2E] text-[9px] text-[#C9C9CE]">
+        G
+      </span>
+    );
+  }
+  if (mention.kind === "everyone") {
+    return (
+      <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[#2A2A2E] text-[9px] text-[#C9C9CE]">
+        @
+      </span>
+    );
+  }
+  return <BotAvatar color={mention.color ?? "#85858A"} identity={mention.id} size={16} />;
+}
+
+function MentionChipIcon({ mention }: { mention: ComposerMention }) {
+  if (mention.kind === "routine") {
+    return <Clock size={13} strokeWidth={1.7} className="shrink-0 text-[#B0B0B6]" />;
+  }
+  if (mention.kind === "connector") {
+    return <Puzzle size={13} strokeWidth={1.7} className="shrink-0 text-[#B0B0B6]" />;
+  }
+  if (mention.kind === "group" || mention.kind === "everyone") {
+    return (
+      <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[#2A2A2E] text-[9px] text-[#C9C9CE]">
+        {mention.kind === "group" ? "G" : "@"}
+      </span>
+    );
+  }
+  return <BotAvatar color={mention.color ?? "#85858A"} identity={mention.id} size={16} />;
+}
+
+function previewMessageText(message: ThreadMessage): string {
+  const text = message.blocks
+    .map((block) => (block.kind === "text" ? block.text : ""))
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (text) return text;
+  if (message.blocks.some((block) => block.kind === "image" || block.kind === "file")) {
+    return t`Attachment`;
+  }
+  return t`Message`;
+}
+
+/** Plain message text for clipboard copy — text/ask/progress only, no chrome. */
+function copyableMessageText(message: ThreadMessage): string {
+  return message.blocks
+    .map((block) => {
+      if (block.kind === "text" || block.kind === "progress" || block.kind === "ask") {
+        return block.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function MessageHoverActions({
+  message,
+  onReply,
+}: {
+  message: ThreadMessage;
+  onReply: (message: ThreadMessage) => void;
+}) {
+  const { t } = useLingui();
+  // Streaming progress bubbles keep hover free for selection / stop clicks.
+  if (message.id.startsWith("progress:")) return null;
+
+  function copyMessage() {
+    const text = copyableMessageText(message);
+    if (!text || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  }
+
+  return (
+    <div
+      data-testid="message-hover-actions"
+      className="pointer-events-none absolute end-0 top-0 z-10 flex items-center gap-0.5 rounded-full bg-[#1C1C1F] p-0.5 opacity-0 shadow-[0_1px_4px_rgba(0,0,0,0.45)] transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+    >
+      <button
+        type="button"
+        aria-label={t`Reply`}
+        onClick={() => onReply(message)}
+        className="grid h-7 w-7 place-items-center rounded-full text-[#C9C9CE] hover:bg-[#2A2A2F] hover:text-[#ECECEE]"
+      >
+        <Reply size={14} strokeWidth={1.8} />
+      </button>
+      <button
+        type="button"
+        aria-label={t`Copy`}
+        onClick={copyMessage}
+        className="grid h-7 w-7 place-items-center rounded-full text-[#C9C9CE] hover:bg-[#2A2A2F] hover:text-[#ECECEE]"
+      >
+        <Copy size={14} strokeWidth={1.8} />
+      </button>
+    </div>
+  );
+}
+
+function firstThreadRoute(
+  bots: readonly Pick<Bot, "id">[],
+  groups: readonly Pick<Group, "id">[],
+): string {
+  if (bots[0]) return `/app/${bots[0].id}`;
+  if (groups[0]) return `/app/g/${groups[0].id}`;
+  return "/app";
+}
+
+function applyThreadEvent(
+  event: ProductEvent,
+  commitSnapshot: (next: ThreadSnapshot | null) => void,
+  commitComputer: (next: ComputerStatus | null) => void,
+  snapshotRef: MutableRefObject<ThreadSnapshot | null>,
+  computerRef: MutableRefObject<ComputerStatus | null>,
+) {
+  if (isThreadSnapshotEvent(event) || event.type === "agent.tool.called") {
+    const next = reduceThreadSnapshot(snapshotRef.current, event);
+    commitSnapshot(next);
+  }
+  if (isComputerStatusEvent(event)) {
+    const next = reduceComputerStatus(computerRef.current, event);
+    commitComputer(next);
+  }
+}
+
+function ComputerReleaseActions({
+  takeoverRequested,
+  onRelease,
+}: {
+  takeoverRequested: boolean;
+  onRelease: (reason?: ComputerReleaseReason) => Promise<void>;
+}) {
+  if (!takeoverRequested) {
+    return (
+      <Button type="button" variant="outline" size="sm" onClick={() => void onRelease()}>
+        <Trans>Release</Trans>
+      </Button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <Button type="button" variant="outline" size="sm" onClick={() => void onRelease("skipped")}>
+        <Trans>Skip</Trans>
+      </Button>
+      <Button type="button" size="sm" onClick={() => void onRelease("done")}>
+        <Trans>I’m done</Trans>
+      </Button>
+    </div>
+  );
+}
+
+function ToolSteps({
+  steps,
+  currentIndex,
+}: {
+  steps: Extract<ThreadMessage["blocks"][number], { kind: "steps" }>["steps"];
+  currentIndex?: number;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {steps.map((step, index) => {
+        const isCurrent = index === currentIndex;
+        return (
+          <div key={index} className="flex items-center gap-2">
+            <span
+              className="text-[13px]"
+              style={{
+                color: isCurrent ? "#F5A03C" : "#4ECB71",
+                animation: isCurrent ? "rkPulse 1.2s ease-in-out infinite" : undefined,
+              }}
+            >
+              {isCurrent ? "◷" : "✓"}
+            </span>
+            <span
+              className="truncate text-[14px]"
+              style={{ color: isCurrent ? "#DFDFE2" : "#85858A" }}
+            >
+              {step.label}
+              {step.count > 1 ? ` ×${step.count}` : ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 const MessageView = memo(function MessageView({
-  botId,
+  artifactTarget,
   canAnswer,
   message,
   onAnswer,
   onOpenBot,
+  onOpenPeerMessages,
+  speakerName,
+  memberName,
+  peerBot,
+  replyPreview,
+  replyToMessageId,
+  onJumpToMessage,
   onRefresh,
+  onBotChanged,
   onAddRoutine,
   voiceReady,
   speaking,
   onSpeak,
 }: {
-  botId: string;
+  artifactTarget: ArtifactTarget;
   canAnswer: boolean;
   message: ThreadMessage;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
+  onOpenPeerMessages: (peerBotId: string) => void;
+  speakerName?: string;
+  memberName?: (botId: string | undefined) => string | undefined;
+  peerBot: (botId: string) => { color: string; status?: string } | undefined;
+  replyPreview?: ThreadMessage;
+  replyToMessageId?: string;
+  onJumpToMessage?: (messageId: string) => void;
   onRefresh: () => Promise<void>;
+  onBotChanged: () => Promise<void>;
   onAddRoutine: (name: string, prompt: string) => void;
   voiceReady: boolean;
   speaking: boolean;
   onSpeak: () => void;
 }) {
+  const { t } = useLingui();
+  const isNarration =
+    message.role === "bot" &&
+    message.blocks.length > 0 &&
+    message.blocks.every(
+      (block) => block.kind === "text" || block.kind === "progress" || block.kind === "steps",
+    );
+  const isLive = message.id.startsWith("progress:");
+  const parentJumpId = replyPreview?.id ?? replyToMessageId;
+  const messageContext = (
+    <>
+      {speakerName ? (
+        <div className="mb-1 text-[12.5px] font-medium text-[#85858A]" dir="auto">
+          {speakerName}
+        </div>
+      ) : null}
+      {parentJumpId ? (
+        <button
+          type="button"
+          data-testid="reply-parent-preview"
+          aria-label={t`Jump to replied message`}
+          onClick={() => onJumpToMessage?.(parentJumpId)}
+          className="mb-2 block max-w-[74%] truncate rounded-[14px] border border-[#26262A] bg-[#131315] px-3 py-2 text-start text-[12.5px] text-[#85858A] hover:border-[#34343B] hover:text-[#C9C9CE]"
+          dir="auto"
+        >
+          {replyPreview ? previewMessageText(replyPreview) : t`Earlier message`}
+        </button>
+      ) : null}
+    </>
+  );
+  if (isNarration) {
+    return (
+      <>
+        {messageContext}
+        <div className="flex justify-start">
+          <div
+            className="max-w-[74%] space-y-2.5 rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#DFDFE2]"
+            dir="auto"
+          >
+            {message.blocks.map((block, i) => {
+              if (block.kind === "steps") {
+                const isCurrentBlock = isLive && i === message.blocks.length - 1;
+                return (
+                  <div key={i} dir="ltr">
+                    <ToolSteps
+                      steps={block.steps}
+                      currentIndex={isCurrentBlock ? block.steps.length - 1 : undefined}
+                    />
+                  </div>
+                );
+              }
+              if (block.kind === "text" || block.kind === "progress") {
+                return (
+                  <div key={i}>
+                    <ChatMarkdown streaming={block.kind === "progress"}>{block.text}</ChatMarkdown>
+                  </div>
+                );
+              }
+              return null;
+            })}
+            {!isLive && voiceReady && message.blocks.some((block) => block.kind === "text") ? (
+              <button
+                type="button"
+                aria-label={speaking ? t`Stop speaking` : t`Speak this reply`}
+                onClick={onSpeak}
+                className="text-[12px] text-[#85858A] hover:text-[#ECECEE]"
+              >
+                {speaking ? <Trans>Stop</Trans> : <Trans>Speak</Trans>}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </>
+    );
+  }
   return (
     <>
+      {messageContext}
       {message.blocks.map((block, i) => {
+        if (block.kind === "handoff") {
+          const from = memberName?.(block.fromBotId) ?? t`bot`;
+          const to = memberName?.(block.toBotId) ?? t`bot`;
+          return (
+            <div
+              key={i}
+              className="flex items-center justify-center gap-2 py-1 text-[13.5px] text-[#85858A]"
+            >
+              <span>
+                ↪ {to} ← {from}
+              </span>
+              <span>{block.text}</span>
+            </div>
+          );
+        }
+        if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {
+          const sent = block.kind === "bot_message_sent";
+          const peer = sent ? block.toBotName : block.fromBotName;
+          const peerBotId = sent ? block.toBotId : block.fromBotId;
+          const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
+          return (
+            <CollaborationMarker
+              key={i}
+              ariaLabel={label}
+              color={peerBot(peerBotId)?.color ?? "#85858A"}
+              identity={peerBotId}
+              label={label}
+              onClick={() => onOpenPeerMessages(peerBotId)}
+            />
+          );
+        }
         if (block.kind === "meta") {
           return (
             <div
@@ -2174,22 +4344,147 @@ const MessageView = memo(function MessageView({
         if (block.kind === "progress") {
           return (
             <div key={i} className="flex justify-start">
-              <div className="max-w-[74%] rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#DFDFE2]">
+              <div
+                className="max-w-[74%] rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#DFDFE2]"
+                dir="auto"
+              >
                 <ChatMarkdown streaming>{block.text}</ChatMarkdown>
               </div>
             </div>
           );
         }
-        if (isCommsBlock(block)) {
-          const commsKey =
-            block.kind === "subagent"
-              ? block.agentId
-              : block.kind === "tool"
-                ? block.executionId
-                : block.botId;
+        if (block.kind === "tool") {
           return (
-            <div key={commsKey || i} className="flex justify-start">
+            <div key={block.executionId || i} className="flex justify-start">
               <AgentCommsPill block={block} onOpenBot={onOpenBot} />
+            </div>
+          );
+        }
+        if (block.kind === "steps") {
+          return (
+            <div key={i} className="flex justify-start">
+              <div
+                className="max-w-[74%] space-y-1.5 rounded-[20px] bg-[#1A1A1D] px-[18px] py-3"
+                dir="ltr"
+              >
+                <ToolSteps
+                  steps={block.steps}
+                  currentIndex={isLive ? block.steps.length - 1 : undefined}
+                />
+              </div>
+            </div>
+          );
+        }
+        if (block.kind === "subagent") {
+          const running = block.status === "running";
+          const failed = block.status === "failed";
+          return (
+            <div
+              key={i}
+              className="w-[min(420px,90%)] rounded-[18px] border border-[#232326] bg-[#17171A] px-[18px] py-4"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[15px] font-medium text-[#ECECEE]" dir="auto">
+                  {block.name}
+                </span>
+                <span
+                  className="rounded-full px-[11px] py-1 text-[13px]"
+                  style={{
+                    background: failed
+                      ? "rgba(230,87,7,.14)"
+                      : running
+                        ? "rgba(245,160,60,.14)"
+                        : "rgba(48,162,75,.14)",
+                    color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71",
+                    animation: running ? "rkPulse 1.2s ease-in-out infinite" : undefined,
+                  }}
+                >
+                  {running ? <Trans>subagent</Trans> : block.status}
+                </span>
+              </div>
+              <div className="mt-2 text-[13.5px] text-[#85858A]">{block.task}</div>
+              {block.progress || block.result ? (
+                <div className="mt-2.5 text-[14.5px] leading-[1.5] text-[#A8A8AD]">
+                  <ChatMarkdown streaming={running}>
+                    {block.result || block.progress || ""}
+                  </ChatMarkdown>
+                </div>
+              ) : null}
+            </div>
+          );
+        }
+        if (block.kind === "child_bot") {
+          const removed = block.status === "deleted" || block.status === "archived";
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={removed}
+              onClick={() => onOpenBot(block.botId)}
+              className="w-[min(340px,90%)] rounded-[18px] border border-[#232326] bg-[#17171A] px-[18px] py-4 text-start disabled:opacity-60"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[15px] font-medium text-[#ECECEE]" dir="auto">
+                  {block.name}
+                </span>
+                <span
+                  className="rounded-full px-[11px] py-1 text-[13px]"
+                  style={{
+                    background: removed ? "rgba(230,87,7,.14)" : "rgba(48,162,75,.14)",
+                    color: removed ? "#E65707" : "#4ECB71",
+                  }}
+                >
+                  {block.status === "archived" ? (
+                    <Trans>archived</Trans>
+                  ) : block.status === "deleted" ? (
+                    <Trans>deleted</Trans>
+                  ) : (
+                    <Trans>bot</Trans>
+                  )}
+                </span>
+              </div>
+              <div className="mt-2 text-[14.5px] leading-[1.5] text-[#A8A8AD]" dir="auto">
+                {removed
+                  ? block.status === "archived"
+                    ? t`Archived. Chat, memory, and files kept.`
+                    : t`Removed with chat, computer, and memory.`
+                  : block.title || t`Opened its thread.`}
+              </div>
+            </button>
+          );
+        }
+        if (block.kind === "choice") {
+          const botId = "botId" in artifactTarget ? artifactTarget.botId : message.botId;
+          if (!botId) return null;
+          return <ChoiceCard key={i} botId={botId} block={block} onBotChanged={onBotChanged} />;
+        }
+        if (block.kind === "app_connect") {
+          const botId = "botId" in artifactTarget ? artifactTarget.botId : message.botId;
+          if (!botId) return null;
+          return (
+            <div key={i} className="flex justify-start">
+              <AppConnectCard botId={botId} block={block} />
+            </div>
+          );
+        }
+        if (block.kind === "chart") {
+          return (
+            <div key={i} className="flex justify-start">
+              <ChartBlockView name={block.name} spec={block.spec} data={block.data} />
+            </div>
+          );
+        }
+        if (block.kind === "mcp_approval") {
+          return (
+            <div key={i} className="flex justify-start">
+              <McpApprovalCard
+                botId={"botId" in artifactTarget ? artifactTarget.botId : message.botId}
+                name={block.name}
+                serverId={block.serverId}
+                transport={block.transport}
+                endpoint={block.endpoint}
+                needsOAuth={block.needsOAuth}
+              />
             </div>
           );
         }
@@ -2199,7 +4494,11 @@ const MessageView = memo(function MessageView({
               key={i}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              <ArtifactImage botId={botId} artifactId={block.artifactId} name={block.name} />
+              <ArtifactImage
+                target={artifactTarget}
+                artifactId={block.artifactId}
+                name={block.name}
+              />
             </div>
           );
         }
@@ -2209,25 +4508,23 @@ const MessageView = memo(function MessageView({
               key={i}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              <button
-                type="button"
-                onClick={() =>
-                  void openArtifact(botId, block.artifactId, block.name, block.mimeType)
-                }
-                className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-left text-[14px] text-[#DFDFE2] hover:bg-[#1F1F22]"
-              >
-                <div className="font-medium">{block.name}</div>
-                <div className="mt-1 text-[#85858A]">
-                  {block.mimeType} · {formatBytes(block.size)}
-                </div>
-              </button>
+              <ArtifactFileCard
+                target={artifactTarget}
+                artifactId={block.artifactId}
+                name={block.name}
+                mimeType={block.mimeType}
+                size={block.size}
+              />
             </div>
           );
         }
         if (block.kind === "text" && message.role === "user") {
           return (
             <div key={i} className="flex justify-end">
-              <div className="max-w-[70%] rounded-[20px] bg-[#F1F1EF] px-[18px] py-3 text-[15.5px] leading-[1.45] text-[#1A1A1A]">
+              <div
+                className="max-w-[70%] rounded-[20px] bg-[#F1F1EF] px-[18px] py-3 text-[15.5px] leading-[1.45] text-[#1A1A1A]"
+                dir="auto"
+              >
                 {block.text}
               </div>
             </div>
@@ -2236,16 +4533,19 @@ const MessageView = memo(function MessageView({
         if (block.kind === "text") {
           return (
             <div key={i} className="flex justify-start">
-              <div className="max-w-[74%] rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#DFDFE2]">
+              <div
+                className="max-w-[74%] rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#DFDFE2]"
+                dir="auto"
+              >
                 <ChatMarkdown>{block.text}</ChatMarkdown>
                 {voiceReady ? (
                   <button
                     type="button"
-                    aria-label={speaking ? "Stop speaking" : "Speak this reply"}
+                    aria-label={speaking ? t`Stop speaking` : t`Speak this reply`}
                     onClick={onSpeak}
                     className="mt-2 text-[12px] text-[#85858A] hover:text-[#ECECEE]"
                   >
-                    {speaking ? "Stop" : "Speak"}
+                    {speaking ? <Trans>Stop</Trans> : <Trans>Speak</Trans>}
                   </button>
                 ) : null}
               </div>
@@ -2292,7 +4592,9 @@ const MessageView = memo(function MessageView({
               className="w-[340px] rounded-[18px] border border-[#232326] bg-[#17171A] px-[18px] py-4"
             >
               <div className="flex items-center justify-between">
-                <span className="text-[15px] font-medium text-[#ECECEE]">Computer</span>
+                <span className="text-[15px] font-medium text-[#ECECEE]">
+                  <Trans>Computer</Trans>
+                </span>
                 <span className="rounded-full bg-[rgba(48,162,75,.14)] px-[11px] py-1 text-[13px] text-[#4ECB71]">
                   {block.state}
                 </span>
@@ -2309,108 +4611,6 @@ const MessageView = memo(function MessageView({
   );
 });
 
-type AskBlock = Extract<ThreadMessage["blocks"][number], { kind: "ask" }>;
-
-function AskCard({
-  block,
-  canAnswer,
-  onAnswer,
-}: {
-  block: AskBlock;
-  canAnswer: boolean;
-  onAnswer: (text: string) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [answer, setAnswer] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  async function submitAnswer(value: string) {
-    const text = value.trim();
-    if (!text || submitting) return;
-    setSubmitting(true);
-    try {
-      await onAnswer(text);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="max-w-[74%] rounded-[20px] border border-[#242428] bg-[#141417] px-5 py-[17px]">
-      <div className="text-[15.5px] leading-[1.5] text-[#ECECEE]">
-        <ChatMarkdown>{block.text}</ChatMarkdown>
-      </div>
-      {block.detail ? (
-        <pre className="mt-3 rounded-xl bg-[#0E0E10] px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-[#85858A]">
-          {block.detail}
-        </pre>
-      ) : null}
-      {block.status === "answered" ? (
-        <div className="mt-3.5 text-[13.5px] font-medium text-[#4ECB71]">
-          {block.answer ? `Answered: ${block.answer}` : "Answered"}
-        </div>
-      ) : !canAnswer ? (
-        <div className="mt-3.5 text-[13.5px] font-medium text-[#85858A]">No longer active</div>
-      ) : editing ? (
-        <form
-          className="mt-3.5 flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submitAnswer(answer);
-          }}
-        >
-          <input
-            aria-label="Answer"
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            placeholder="Type your answer"
-            className="rounded-[11px] border border-[#303035] bg-[#0E0E10] px-3.5 py-2.5 text-[14.5px] text-[#ECECEE] outline-none focus:border-[#66666D]"
-          />
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={!answer.trim() || submitting}
-              className="rounded-[11px] bg-[#F1F1EF] px-[17px] py-2 text-[14.5px] font-medium text-[#17171A] disabled:opacity-50"
-            >
-              {submitting ? "Sending…" : "Send answer"}
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => {
-                setAnswer("");
-                setEditing(false);
-              }}
-              className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14.5px] text-[#C9C9CE] disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      ) : (
-        <div className="mt-3.5 flex gap-2">
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void submitAnswer("approved")}
-            className="rounded-[11px] bg-[#F1F1EF] px-[17px] py-2 text-[14.5px] font-medium text-[#17171A] disabled:opacity-50"
-          >
-            {submitting ? "Sending…" : "Send it"}
-          </button>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => setEditing(true)}
-            className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14.5px] text-[#C9C9CE] disabled:opacity-50"
-          >
-            Edit first
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ComputerModePicker({
   value,
   onChange,
@@ -2420,7 +4620,9 @@ function ComputerModePicker({
 }) {
   return (
     <div className="mt-4">
-      <div className="text-[14px] text-[#85858A]">Computer</div>
+      <div className="text-[14px] text-[#85858A]">
+        <Trans>Computer</Trans>
+      </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
         {(["team", "dedicated"] as const).map((mode) => (
           <button
@@ -2434,7 +4636,7 @@ function ComputerModePicker({
                 : "border-[#26262A] text-[#85858A]"
             }`}
           >
-            {mode === "team" ? "Team" : "Private"}
+            {mode === "team" ? <Trans>Team</Trans> : <Trans>Private</Trans>}
           </button>
         ))}
       </div>
@@ -2451,46 +4653,72 @@ function CreateBotForm({
     title: string;
     description: string;
     computerMode: ComputerMode;
-  }) => void;
+  }) => Promise<void>;
   onCancel: () => void;
 }) {
+  const { t } = useLingui();
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [computerMode, setComputerMode] = useState<ComputerMode>("team");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit() {
+    if (!name.trim() || submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await onCreate({ name, title, description, computerMode });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t`Could not create bot`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <span className="text-[13.5px] text-[#85858A]">New bot</span>
-        <button type="button" onClick={onCancel}>
+        <span className="text-[13.5px] text-[#85858A]">
+          <Trans>New bot</Trans>
+        </span>
+        <button type="button" aria-label={t`Cancel new bot`} onClick={onCancel}>
           <X size={16} strokeWidth={1.8} />
         </button>
       </div>
+      {error ? (
+        <p role="alert" data-testid="create-bot-error" className="mb-3 text-[13px] text-[#C94244]">
+          {error}
+        </p>
+      ) : null}
       <label className="mt-6 block text-[14px] text-[#85858A]">
-        Name
+        <Trans>Name</Trans>
         <input
           value={name}
+          maxLength={BOT_NAME_MAX_LENGTH}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Name this bot"
+          placeholder={t`Name this bot`}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
       <label className="mt-4 block text-[14px] text-[#85858A]">
-        Title
+        <Trans>Title</Trans>
         <input
           value={title}
+          maxLength={BOT_TITLE_MAX_LENGTH}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Describe what this bot does"
+          placeholder={t`Describe what this bot does`}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
       <label className="mt-4 block text-[14px] text-[#85858A]">
-        Description
+        <Trans>Description</Trans>
         <textarea
           value={description}
+          maxLength={BOT_DESCRIPTION_MAX_LENGTH}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="What this bot is for"
+          placeholder={t`What this bot is for`}
           rows={4}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
@@ -2498,11 +4726,11 @@ function CreateBotForm({
       <ComputerModePicker value={computerMode} onChange={setComputerMode} />
       <button
         type="button"
-        disabled={!name.trim()}
-        onClick={() => onCreate({ name, title, description, computerMode })}
+        disabled={!name.trim() || submitting}
+        onClick={() => void handleSubmit()}
         className="mt-5 rounded-[11px] bg-[#F1F1EF] px-4 py-2 text-[#17171A] disabled:opacity-40"
       >
-        Create
+        {submitting ? <Trans>Creating…</Trans> : <Trans>Create</Trans>}
       </button>
     </div>
   );
@@ -2510,96 +4738,265 @@ function CreateBotForm({
 
 function BotSettings({
   bot,
+  computer,
+  memoryProviderConfigured,
   onSave,
   onExport,
   onClear,
+  onComputerChanged,
 }: {
   bot: Bot;
+  computer: ComputerStatus | null;
+  memoryProviderConfigured: boolean;
   onSave: (patch: {
     name?: string;
     title?: string;
     description?: string;
     instructions?: string;
     computerMode: ComputerMode;
+    memoryScope?: "isolated" | "shared" | null;
     autoSpeak?: boolean;
     voiceId?: string | null;
+    modelProvider?: string | null;
+    modelId?: string | null;
+    thinkingLevel?: ThinkingLevel | null;
   }) => Promise<void>;
   onExport: () => Promise<void>;
   onClear: () => void;
+  onComputerChanged: () => Promise<void>;
 }) {
+  const { t } = useLingui();
   const [name, setName] = useState(bot.name);
   const [title, setTitle] = useState(bot.title);
   const [description, setDescription] = useState(bot.description);
   const [computerMode, setComputerMode] = useState(bot.computerMode);
+  const [memoryScope, setMemoryScope] = useState(bot.memoryScope);
   const [autoSpeak, setAutoSpeak] = useState(bot.autoSpeak);
   const [voiceId, setVoiceId] = useState(bot.voiceId ?? "");
   const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  const [modelKey, setModelKey] = useState(
+    bot.modelProvider && bot.modelId ? modelOptionKey(bot.modelProvider, bot.modelId) : "",
+  );
+  const [thinkingLevel, setThinkingLevel] = useState(bot.thinkingLevel ?? "");
+  const [credentials, setCredentials] = useState<ModelCredential[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
+  const [modelMetaReady, setModelMetaReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     void rpc.voice
       .voices({})
       .then(setVoices)
       .catch(() => setVoices([]));
+    void Promise.all([rpc.models.credentials(), rpc.models.list(), rpc.me()])
+      .then(([nextCredentials, nextCatalog, nextMe]) => {
+        setCredentials(nextCredentials);
+        setCatalog(nextCatalog);
+        setMe(nextMe);
+        // Only mark ready on success — a failed catalog load must not clear
+        // an existing thinkingLevel override on save.
+        setModelMetaReady(true);
+      })
+      .catch(() => undefined);
   }, []);
+
+  const connectedOptions: Array<{
+    key: string;
+    provider: string;
+    modelId: string;
+    label: string;
+  }> = [];
+  const seenOptions = new Set<string>();
+  for (const credential of credentials) {
+    const providerModels = catalog.filter(
+      (entry) => entry.provider === credential.provider && !entry.placeholder,
+    );
+    const credentialInCatalog = Boolean(
+      credential.modelId && providerModels.some((entry) => entry.id === credential.modelId),
+    );
+    // Catalog providers expand to every model for that connection. Free-form
+    // credentials (model id not in the catalog) stay a single connected pair.
+    const options =
+      credential.modelId && !credentialInCatalog
+        ? [
+            {
+              key: modelOptionKey(credential.provider, credential.modelId),
+              provider: credential.provider,
+              modelId: credential.modelId,
+              label: `${credential.label} · ${credential.modelId}`,
+            },
+          ]
+        : providerModels.map((entry) => ({
+            key: modelOptionKey(entry.provider, entry.id),
+            provider: entry.provider,
+            modelId: entry.id,
+            label: `${entry.providerName ?? entry.provider} · ${entry.label}`,
+          }));
+    for (const option of options) {
+      if (seenOptions.has(option.key)) continue;
+      seenOptions.add(option.key);
+      connectedOptions.push(option);
+    }
+  }
+
+  const effectiveProvider = modelKey
+    ? parseModelOptionKey(modelKey)?.provider
+    : (me?.defaultProvider ?? null);
+  const effectiveModelId = modelKey
+    ? parseModelOptionKey(modelKey)?.modelId
+    : (me?.defaultModel ?? null);
+  const effectiveEntry =
+    effectiveProvider && effectiveModelId
+      ? catalog.find(
+          (entry) => entry.provider === effectiveProvider && entry.id === effectiveModelId,
+        )
+      : undefined;
+  const thinkingOptions = (effectiveEntry?.thinkingLevels ?? []).filter((level) => level !== "off");
 
   return (
     <div data-testid="bot-settings">
       <div className="flex justify-center">
-        <BotAvatar color={bot.color} size={64} />
+        <BotAvatar color={bot.color} identity={bot.id} size={64} status={bot.status} />
       </div>
       <label className="mt-6 block text-[14px] text-[#85858A]">
-        Name
+        <Trans>Name</Trans>
         <input
           value={name}
+          maxLength={BOT_NAME_MAX_LENGTH}
           onChange={(e) => setName(e.target.value)}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
       <label className="mt-4 block text-[14px] text-[#85858A]">
-        Title
+        <Trans>Title</Trans>
         <input
           value={title}
+          maxLength={BOT_TITLE_MAX_LENGTH}
           onChange={(e) => setTitle(e.target.value)}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
       <label className="mt-4 block text-[14px] text-[#85858A]">
-        Description
+        <Trans>Description</Trans>
         <textarea
           value={description}
+          maxLength={BOT_DESCRIPTION_MAX_LENGTH}
           onChange={(e) => setDescription(e.target.value)}
           rows={4}
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
-      <ComputerModePicker value={computerMode} onChange={setComputerMode} />
-      <label className="mt-5 flex cursor-pointer items-center gap-3 text-[14px] text-[#C9C9CE]">
-        <input
-          type="checkbox"
-          checked={autoSpeak}
-          onChange={(event) => setAutoSpeak(event.target.checked)}
-        />
-        Read replies aloud
-      </label>
-      {voices.length ? (
+      <details data-testid="bot-settings-advanced" className="group mt-5">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[14px] text-[#85858A]">
+          <span className="text-[#85858A]">
+            <Trans>Advanced</Trans>
+          </span>
+          <span aria-hidden="true" className="transition-transform group-open:rotate-90">
+            ›
+          </span>
+        </summary>
+        <ComputerModePicker value={computerMode} onChange={setComputerMode} />
+        <Suspense fallback={null}>
+          <ScratchpadSection botId={bot.id} />
+        </Suspense>
         <label className="mt-4 block text-[14px] text-[#85858A]">
-          Voice
+          <Trans>Model</Trans>
           <select
-            value={voiceId}
-            onChange={(event) => setVoiceId(event.target.value)}
+            value={modelKey}
+            onChange={(event) => {
+              setModelKey(event.target.value);
+              setThinkingLevel("");
+            }}
             className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
           >
-            <option value="">Account default</option>
-            {voices.map((voice) => (
-              <option key={voice.id} value={voice.id}>
-                {voice.label}
+            <option value="">
+              {t`Workspace default`}
+              {me?.defaultModel
+                ? ` (${catalogLabel(catalog, me.defaultProvider, me.defaultModel) ?? me.defaultModel})`
+                : ""}
+            </option>
+            {modelKey && !connectedOptions.some((option) => option.key === modelKey) ? (
+              <option value={modelKey}>{parseModelOptionKey(modelKey)?.modelId ?? modelKey}</option>
+            ) : null}
+            {connectedOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
               </option>
             ))}
           </select>
         </label>
-      ) : null}
+        {thinkingOptions.length ? (
+          <label className="mt-4 block text-[14px] text-[#85858A]">
+            <Trans>Thinking</Trans>
+            <select
+              value={thinkingLevel}
+              onChange={(event) => setThinkingLevel(event.target.value)}
+              className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+            >
+              <option value="">{t`Default (medium)`}</option>
+              {thinkingOptions.map((level) => (
+                <option key={level} value={level}>
+                  {thinkingLevelLabel(level)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {memoryProviderConfigured ? (
+          <div className="mt-4 text-[14px] text-[#85858A]">
+            <Trans>Memory scope</Trans>
+            <div className="mt-2 flex gap-2">
+              {(
+                [
+                  { value: null, label: t`Inherit default` },
+                  { value: "isolated" as const, label: t`Isolated` },
+                  { value: "shared" as const, label: t`Shared` },
+                ] satisfies Array<{ value: "isolated" | "shared" | null; label: string }>
+              ).map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  aria-pressed={memoryScope === option.value}
+                  onClick={() => setMemoryScope(option.value)}
+                  className={`flex-1 rounded-[11px] border px-3 py-2 text-[13px] ${
+                    memoryScope === option.value
+                      ? "border-[#4A4A50] bg-[#1A1A1D] text-[#ECECEE]"
+                      : "border-[#26262A] text-[#85858A]"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <label className="mt-5 flex cursor-pointer items-center gap-3 text-[14px] text-[#C9C9CE]">
+          <input
+            type="checkbox"
+            checked={autoSpeak}
+            onChange={(event) => setAutoSpeak(event.target.checked)}
+          />
+          <Trans>Read replies aloud</Trans>
+        </label>
+        {voices.length ? (
+          <label className="mt-4 block text-[14px] text-[#85858A]">
+            <Trans>Voice</Trans>
+            <select
+              value={voiceId}
+              onChange={(event) => setVoiceId(event.target.value)}
+              className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+            >
+              <option value="">{t`Account default`}</option>
+              {voices.map((voice) => (
+                <option key={voice.id} value={voice.id}>
+                  {voice.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </details>
       {error ? <p className="mt-2 text-[13px] text-[#E65707]">{error}</p> : null}
       <div className="mt-5 flex flex-col items-start gap-3">
         <button
@@ -2608,35 +5005,82 @@ function BotSettings({
           onClick={() => {
             setSaving(true);
             setError(null);
+            const selected = modelKey ? parseModelOptionKey(modelKey) : null;
             void onSave({
               name,
               title,
               description,
               instructions: description,
               computerMode,
+              memoryScope,
               autoSpeak,
               voiceId: voiceId || null,
+              modelProvider: selected?.provider ?? null,
+              modelId: selected?.modelId ?? null,
+              // Only clear thinking when catalog metadata is available; otherwise
+              // preserve the stored override if models.list failed or is still loading.
+              ...(modelMetaReady
+                ? {
+                    thinkingLevel: thinkingOptions.length
+                      ? ((thinkingLevel || null) as ThinkingLevel | null)
+                      : null,
+                  }
+                : {}),
             })
-              .catch((err) => setError(err instanceof Error ? err.message : "Could not save"))
+              .catch((err) => setError(err instanceof Error ? err.message : t`Could not save`))
               .finally(() => setSaving(false));
           }}
           className="rounded-[11px] bg-[#F1F1EF] px-4 py-2 text-[#17171A] disabled:opacity-40"
         >
-          Save
+          <Trans>Save</Trans>
         </button>
         <button
           type="button"
           onClick={() => void onExport()}
           className="text-[14px] text-[#85858A]"
         >
-          Export
+          <Trans>Export</Trans>
         </button>
         <button type="button" onClick={onClear} className="text-[14px] text-[#E65707]">
-          Clear conversation
+          <Trans>Clear conversation</Trans>
         </button>
+        <ComputerMaintenanceActions
+          botId={bot.id}
+          computer={computer}
+          onChanged={onComputerChanged}
+        />
       </div>
     </div>
   );
+}
+
+function modelOptionKey(provider: string, modelId: string) {
+  return `${provider}::${modelId}`;
+}
+
+function thinkingLevelLabel(level: ThinkingLevel) {
+  if (level === "xhigh") return t`Extra high`;
+  if (level === "low") return t`Low`;
+  if (level === "medium") return t`Medium`;
+  if (level === "high") return t`High`;
+  if (level === "minimal") return t`Minimal`;
+  if (level === "max") return t`Max`;
+  return `${level.slice(0, 1).toUpperCase()}${level.slice(1)}`;
+}
+
+function parseModelOptionKey(key: string) {
+  const separator = key.indexOf("::");
+  if (separator <= 0) return null;
+  return { provider: key.slice(0, separator), modelId: key.slice(separator + 2) };
+}
+
+function catalogLabel(
+  catalog: ModelCatalogEntry[],
+  provider: string | null | undefined,
+  modelId: string,
+) {
+  if (!provider) return undefined;
+  return catalog.find((entry) => entry.provider === provider && entry.id === modelId)?.label;
 }
 
 function NewBotSectionDialog({
@@ -2644,10 +5088,11 @@ function NewBotSectionDialog({
   onCancel,
   onConfirm,
 }: {
-  bot: Bot;
+  bot: Pick<Bot, "name">;
   onCancel: () => void;
   onConfirm: (name: string) => Promise<void>;
 }) {
+  const { t } = useLingui();
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2681,19 +5126,19 @@ function NewBotSectionDialog({
           setSaving(true);
           setError(null);
           void onConfirm(trimmed).catch((err: unknown) => {
-            setError(err instanceof Error ? err.message : "Could not create section");
+            setError(err instanceof Error ? err.message : t`Could not create section`);
             setSaving(false);
           });
         }}
       >
         <h2 id="new-bot-section-title" className="text-[17px] font-medium text-[#F1F1F2]">
-          New section
+          <Trans>New section</Trans>
         </h2>
         <p className="mt-2 text-[14px] leading-6 text-[#9A9AA0]">
-          Create a section and move {bot.name} into it.
+          <Trans>Create a section and move {bot.name} into it.</Trans>
         </p>
         <label className="mt-4 block text-[13.5px] text-[#C9C9CE]">
-          Name
+          <Trans>Name</Trans>
           <input
             maxLength={60}
             value={name}
@@ -2709,14 +5154,14 @@ function NewBotSectionDialog({
             onClick={onCancel}
             className="rounded-[10px] px-3.5 py-2 text-[14px] text-[#C9C9CE] hover:bg-[#29292D] disabled:opacity-40"
           >
-            Cancel
+            <Trans>Cancel</Trans>
           </button>
           <button
             type="submit"
             disabled={saving || !name.trim()}
             className="rounded-[10px] bg-[#F1F1EF] px-3.5 py-2 text-[14px] font-medium text-[#17171A] disabled:opacity-40"
           >
-            {saving ? "Creating…" : "Create"}
+            {saving ? <Trans>Creating…</Trans> : <Trans>Create</Trans>}
           </button>
         </div>
       </form>
@@ -2729,10 +5174,11 @@ function ClearConversationDialog({
   onCancel,
   onConfirm,
 }: {
-  bot: Bot;
+  bot: Pick<Bot, "name">;
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }) {
+  const { t } = useLingui();
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2761,14 +5207,16 @@ function ClearConversationDialog({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 id="clear-conversation-title" className="text-[17px] font-medium text-[#F1F1F2]">
-          Clear {bot.name}’s conversation?
+          <Trans>Clear {bot.name}’s conversation?</Trans>
         </h2>
         <p
           id="clear-conversation-description"
           className="mt-2 text-[14px] leading-6 text-[#9A9AA0]"
         >
-          This permanently removes every message and stops current work. The bot, computer, memory,
-          and routines are kept.
+          <Trans>
+            This permanently removes every message and stops current work. The chat remains
+            available.
+          </Trans>
         </p>
         {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
@@ -2778,7 +5226,7 @@ function ClearConversationDialog({
             onClick={onCancel}
             className="rounded-[10px] px-3.5 py-2 text-[14px] text-[#C9C9CE] hover:bg-[#29292D] disabled:opacity-40"
           >
-            Cancel
+            <Trans>Cancel</Trans>
           </button>
           <button
             type="button"
@@ -2787,13 +5235,13 @@ function ClearConversationDialog({
               setClearing(true);
               setError(null);
               void onConfirm().catch((err: unknown) => {
-                setError(err instanceof Error ? err.message : "Could not clear conversation");
+                setError(err instanceof Error ? err.message : t`Could not clear conversation`);
                 setClearing(false);
               });
             }}
             className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
-            {clearing ? "Clearing…" : "Clear"}
+            {clearing ? <Trans>Clearing…</Trans> : <Trans>Clear</Trans>}
           </button>
         </div>
       </div>
@@ -2810,6 +5258,7 @@ function DeleteBotDialog({
   onCancel: () => void;
   onConfirm: (deleteMemories: boolean) => Promise<void>;
 }) {
+  const { t } = useLingui();
   const [deleting, setDeleting] = useState(false);
   const [deleteMemories, setDeleteMemories] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2839,14 +5288,18 @@ function DeleteBotDialog({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 id="delete-bot-title" className="text-[17px] font-medium text-[#F1F1F2]">
-          Delete {bot.name}?
+          <Trans>Delete {bot.name}?</Trans>
         </h2>
         <p id="delete-bot-description" className="mt-2 text-[14px] leading-6 text-[#9A9AA0]">
-          Its conversation, files, and routines will be permanently deleted. Bots it created stay in
-          your list.
+          <Trans>
+            Its conversation, files, and routines will be permanently deleted. Bots it created stay
+            in your list.
+          </Trans>
         </p>
         <fieldset className="mt-4 space-y-2">
-          <legend className="mb-2 text-[13.5px] text-[#C9C9CE]">What about its memories?</legend>
+          <legend className="mb-2 text-[13.5px] text-[#C9C9CE]">
+            <Trans>What about its memories?</Trans>
+          </legend>
           <label className="flex cursor-pointer gap-3 rounded-[11px] border border-[#343438] p-3">
             <input
               type="radio"
@@ -2855,9 +5308,11 @@ function DeleteBotDialog({
               onChange={() => setDeleteMemories(false)}
             />
             <span>
-              <span className="block text-[14px] text-[#ECECEE]">Keep memories</span>
+              <span className="block text-[14px] text-[#ECECEE]">
+                <Trans>Keep memories</Trans>
+              </span>
               <span className="mt-0.5 block text-[12.5px] text-[#85858A]">
-                Move them to your shared memory.
+                <Trans>Move them to your shared memory.</Trans>
               </span>
             </span>
           </label>
@@ -2869,9 +5324,11 @@ function DeleteBotDialog({
               onChange={() => setDeleteMemories(true)}
             />
             <span>
-              <span className="block text-[14px] text-[#ECECEE]">Delete memories too</span>
+              <span className="block text-[14px] text-[#ECECEE]">
+                <Trans>Delete memories too</Trans>
+              </span>
               <span className="mt-0.5 block text-[12.5px] text-[#85858A]">
-                This cannot be undone.
+                <Trans>This cannot be undone.</Trans>
               </span>
             </span>
           </label>
@@ -2884,7 +5341,7 @@ function DeleteBotDialog({
             onClick={onCancel}
             className="rounded-[10px] px-3.5 py-2 text-[14px] text-[#C9C9CE] hover:bg-[#29292D] disabled:opacity-40"
           >
-            Cancel
+            <Trans>Cancel</Trans>
           </button>
           <button
             type="button"
@@ -2893,13 +5350,13 @@ function DeleteBotDialog({
               setDeleting(true);
               setError(null);
               void onConfirm(deleteMemories).catch((err: unknown) => {
-                setError(err instanceof Error ? err.message : "Could not delete bot");
+                setError(err instanceof Error ? err.message : t`Could not delete bot`);
                 setDeleting(false);
               });
             }}
             className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
-            {deleting ? "Deleting…" : "Delete"}
+            {deleting ? <Trans>Deleting…</Trans> : <Trans>Delete</Trans>}
           </button>
         </div>
       </div>
@@ -2907,15 +5364,18 @@ function DeleteBotDialog({
   );
 }
 
-function DeleteRoutineDialog({
-  routine,
+function DeleteItemDialog({
+  item,
+  noun,
   onCancel,
   onConfirm,
 }: {
-  routine: Routine;
+  item: { name: string };
+  noun: "group" | "routine";
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }) {
+  const { t } = useLingui();
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2938,16 +5398,16 @@ function DeleteRoutineDialog({
       <div
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="delete-routine-title"
-        aria-describedby="delete-routine-description"
+        aria-labelledby="delete-item-title"
+        aria-describedby="delete-item-description"
         className="w-full max-w-[420px] rounded-[18px] border border-[#343438] bg-[#1A1A1D] p-5 shadow-[0_24px_70px_rgba(0,0,0,.65)]"
         onPointerDown={(event) => event.stopPropagation()}
       >
-        <h2 id="delete-routine-title" className="text-[17px] font-medium text-[#F1F1F2]">
-          Delete {routine.name}?
+        <h2 id="delete-item-title" className="text-[17px] font-medium text-[#F1F1F2]">
+          <Trans>Delete {item.name}?</Trans>
         </h2>
-        <p id="delete-routine-description" className="mt-2 text-[14px] leading-6 text-[#9A9AA0]">
-          This cannot be undone.
+        <p id="delete-item-description" className="mt-2 text-[14px] leading-6 text-[#9A9AA0]">
+          <Trans>This cannot be undone.</Trans>
         </p>
         {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
@@ -2957,7 +5417,7 @@ function DeleteRoutineDialog({
             onClick={onCancel}
             className="rounded-[10px] px-3.5 py-2 text-[14px] text-[#C9C9CE] hover:bg-[#29292D] disabled:opacity-40"
           >
-            Cancel
+            <Trans>Cancel</Trans>
           </button>
           <button
             type="button"
@@ -2966,13 +5426,19 @@ function DeleteRoutineDialog({
               setDeleting(true);
               setError(null);
               void onConfirm().catch((err: unknown) => {
-                setError(err instanceof Error ? err.message : "Could not delete routine");
+                setError(
+                  err instanceof Error
+                    ? err.message
+                    : noun === "group"
+                      ? t`Could not delete group`
+                      : t`Could not delete routine`,
+                );
                 setDeleting(false);
               });
             }}
             className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
-            {deleting ? "Deleting…" : "Delete"}
+            {deleting ? <Trans>Deleting…</Trans> : <Trans>Delete</Trans>}
           </button>
         </div>
       </div>
@@ -2985,30 +5451,448 @@ function computerPlaceholder(
   booting: boolean,
   label: string,
 ) {
-  if (state === "booting" || booting) return "Booting live desktop…";
+  if (state === "booting" || booting) return t`Booting live desktop…`;
   if (state === "running") return label;
-  if (state === "suspended") return "Computer is asleep — take control to wake it";
-  if (state === "error") return "Computer failed to boot";
-  return "Computer is stopped";
+  if (state === "suspended") return t`Computer is asleep. Take control to wake it.`;
+  if (state === "error") return t`Computer failed to boot`;
+  return t`Computer is stopped`;
 }
 
 function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string) {
-  return mode === "dedicated" ? `${botName}’s computer` : "Team Computer";
+  return mode === "dedicated" ? t`${botName}’s computer` : t`Team Computer`;
+}
+
+function ChoiceCard({
+  botId,
+  block,
+  onBotChanged,
+}: {
+  botId: string;
+  block: Extract<MessageBlock, { kind: "choice" }>;
+  onBotChanged: () => Promise<void>;
+}) {
+  const { t } = useLingui();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function choose(optionId: string) {
+    setPending(true);
+    setError(null);
+    try {
+      await rpc.onboarding.choose({ botId, optionId });
+      await onBotChanged().catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t`Could not save this choice`);
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="w-[min(420px,80%)] rounded-[20px] bg-[#1A1A1D] px-[18px] py-[14px]">
+        <div className="text-[15.5px] text-[#DFDFE2]">{block.question}</div>
+        {block.subtitle ? (
+          <div className="mt-0.5 text-[13px] text-[#85858A]">{block.subtitle}</div>
+        ) : null}
+        <div className="mt-3 space-y-1.5">
+          {block.options
+            .filter((option) => !block.answerId || option.id === block.answerId)
+            .map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={Boolean(block.answerId) || pending}
+                onClick={() => void choose(option.id)}
+                className={`flex w-full items-center gap-3 rounded-[12px] border border-[#2A2A2F] px-3.5 py-3 text-start disabled:opacity-60 ${block.answerId ? "bg-[#1F1F23]" : "bg-[#161619] hover:bg-[#222226]"}`}
+              >
+                <span className="grid h-[24px] w-[24px] place-items-center rounded-[7px] bg-[#232327] text-[12.5px] text-[#9A9AA0]">
+                  {option.letter}
+                </span>
+                <span
+                  className={`flex-1 text-[15px] ${block.answerId ? "text-[#85858A]" : "text-[#ECECEE]"}`}
+                >
+                  {option.label}
+                </span>
+                {block.answerId === option.id ? <span className="text-[#B9B9C0]">✓</span> : null}
+              </button>
+            ))}
+        </div>
+        {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function AppConnectCard({
+  botId,
+  block,
+}: {
+  botId: string;
+  block: Extract<MessageBlock, { kind: "app_connect" }>;
+}) {
+  const { t } = useLingui();
+  const [busy, setBusy] = useState(false);
+  const [localStatus, setLocalStatus] = useState<"pending" | "connected">(block.status);
+  const [error, setError] = useState<string | null>(null);
+  const connectionAttempt = useRef<AbortController | null>(null);
+  const status = block.status === "connected" ? "connected" : localStatus;
+  useEffect(() => () => connectionAttempt.current?.abort(), []);
+
+  async function authorize() {
+    connectionAttempt.current?.abort();
+    const controller = new AbortController();
+    connectionAttempt.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      const started = await rpc.connections.begin({
+        provider: block.provider,
+        displayName: block.name,
+      });
+      if (started.authorizationUrl) {
+        window.open(started.authorizationUrl, "rakazo-app-connect", "popup,width=560,height=720");
+      }
+      for (let i = 0; i < 60; i += 1) {
+        if (controller.signal.aborted) return;
+        const row = await rpc.connections
+          .complete({ connectionId: started.connectionId })
+          .catch(() => undefined);
+        if (row?.status === "connected") {
+          if (controller.signal.aborted) return;
+          setLocalStatus("connected");
+          await rpc.onboarding
+            .appConnected({ botId, provider: block.provider })
+            .catch(() => undefined);
+          return;
+        }
+        await abortableDelay(2_000, controller.signal);
+      }
+      if (!controller.signal.aborted) setError(t`Authorization timed out. Please try again.`);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setError(error instanceof Error ? error.message : t`Could not authorize this app`);
+      }
+    } finally {
+      if (connectionAttempt.current === controller) {
+        connectionAttempt.current = null;
+        setBusy(false);
+      }
+    }
+  }
+  return (
+    <BuiCard
+      role="group"
+      aria-label={t`${block.name} connection`}
+      className="w-[min(420px,80%)] px-4 py-3.5"
+    >
+      <div className="flex items-center gap-3.5">
+        {block.logo ? (
+          <img
+            src={block.logo}
+            alt=""
+            className="h-10 w-10 rounded-[10px] bg-white object-contain p-1"
+          />
+        ) : (
+          <span className="grid h-10 w-10 place-items-center rounded-[10px] bg-[#30356A] text-[15px] text-[#E2E4FF]">
+            {block.name.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-medium" style={{ color: "var(--bui-ink)" }}>
+            {block.name}
+          </span>
+          <span className="block truncate text-[13px]" style={{ color: "var(--bui-ink-3)" }}>
+            {block.description}
+          </span>
+        </span>
+        {status === "connected" ? (
+          <SuccessPop label={t`Connected`} />
+        ) : (
+          <BuiButton disabled={busy} onClick={() => void authorize()}>
+            {busy ? t`Waiting…` : t`Authorize`}
+          </BuiButton>
+        )}
+      </div>
+      {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+    </BuiCard>
+  );
+}
+
+function ChartCanvas({
+  spec,
+  data,
+  width,
+  height,
+}: {
+  spec: Record<string, unknown>;
+  data: unknown[];
+  width: number;
+  height?: number;
+}) {
+  const { t } = useLingui();
+  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{
+    title?: string;
+    swatches: { label: string; color: string }[];
+  }>({ swatches: [] });
+  useEffect(() => {
+    let cancelled = false;
+    // Plot loads lazily so threads without charts never pay for the library.
+    void (async () => {
+      try {
+        const { buildPlotParts } = await import("@rakazo/core/plot");
+        if (cancelled || !ref.current) return;
+        // Hover inspection by default: give the first mark a tooltip unless
+        // the spec already asks for one somewhere.
+        const marks = Array.isArray((spec as { marks?: unknown[] }).marks)
+          ? ((spec as { marks: { options?: Record<string, unknown> }[] }).marks ?? [])
+          : [];
+        const hasTip = marks.some((mark) => mark.options && "tip" in mark.options);
+        const liveSpec = hasTip
+          ? spec
+          : {
+              ...spec,
+              marks: marks.map((mark, index) =>
+                index === 0 ? { ...mark, options: { ...(mark.options ?? {}), tip: true } } : mark,
+              ),
+            };
+        const parts = buildPlotParts(liveSpec as never, data, document, { width, height });
+        setMeta({ title: parts.title, swatches: parts.swatches });
+        setError(null);
+        ref.current.replaceChildren(parts.plotted);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : t`Could not render chart`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spec, data, width, height, t]);
+  if (error)
+    return (
+      <div className="text-[13px] text-[#F3A2AA]">
+        <Trans>Chart failed to render: {error}</Trans>
+      </div>
+    );
+  return (
+    <div className="text-[#C9C9CE]">
+      {meta.title ? (
+        <div className="mb-1 text-[14.5px] font-semibold text-[#ECECEE]">{meta.title}</div>
+      ) : null}
+      {meta.swatches.length > 0 ? (
+        <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1">
+          {meta.swatches.map((swatch) => (
+            <span
+              key={swatch.label}
+              className="flex items-center gap-1.5 text-[12px] text-[#A6A6AD]"
+            >
+              <span
+                className="h-[10px] w-[10px] rounded-[3px]"
+                style={{ background: swatch.color }}
+              />
+              {swatch.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div ref={ref} className="[&_svg]:max-w-full" />
+    </div>
+  );
+}
+
+type McpApprovalState = "pending" | "connecting" | "connected" | "dismissed";
+
+/** Approval card for an agent-created MCP server: the user completes browser
+ * OAuth (or confirms no authorization is needed) without leaving the chat. */
+function McpApprovalCard({
+  botId,
+  name,
+  serverId,
+  transport,
+  endpoint,
+  needsOAuth,
+}: {
+  botId: string | undefined;
+  name: string;
+  serverId: string;
+  transport: string;
+  endpoint: string | null;
+  needsOAuth: boolean;
+}) {
+  const { t } = useLingui();
+  const [state, setState] = useState<McpApprovalState>("pending");
+  const [error, setError] = useState<string | null>(null);
+
+  async function authorize() {
+    if (!botId) {
+      setError(t`This server cannot be assigned without a bot.`);
+      return;
+    }
+    setState("connecting");
+    setError(null);
+    try {
+      if (needsOAuth) {
+        const result = await connectMcpOauth(serverId);
+        if (result === "cancelled") {
+          setState("pending");
+          return;
+        }
+      }
+      await rpc.mcp.assignments.approve({ botId, serverId });
+      setState("connected");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t`Could not approve this server`);
+      setState("pending");
+    }
+  }
+
+  const summary = endpoint ?? `stdio · ${transport}`;
+  return (
+    <BuiCard className="max-w-[74%] p-4">
+      <div className="flex items-center gap-2">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[#30356A] text-xs text-[#E2E4FF]">
+          M
+        </span>
+        <span className="text-[14.5px] font-medium" style={{ color: "var(--bui-ink)" }}>
+          <Trans>Connect MCP server “{name}”</Trans>
+        </span>
+      </div>
+      <p className="mt-1.5 truncate text-[12px]" style={{ color: "var(--bui-ink-3)" }}>
+        {summary}
+      </p>
+      {state === "pending" || state === "connecting" ? (
+        <>
+          <p className="mt-2 text-[13px] leading-[1.5]" style={{ color: "var(--bui-ink-2)" }}>
+            {needsOAuth
+              ? t`This server uses browser sign-in. Authorize it to let your agents use its tools — a popup will open.`
+              : t`Approve this server to let your agent use its tools.`}
+          </p>
+          {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+          <div className="mt-3 flex gap-2">
+            <BuiButton
+              tone="accent"
+              disabled={state === "connecting"}
+              onClick={() => void authorize()}
+            >
+              {state === "connecting" ? t`Connecting…` : needsOAuth ? t`Authorize` : t`Approve`}
+            </BuiButton>
+            <BuiButton onClick={() => setState("dismissed")}>
+              <Trans>Not now</Trans>
+            </BuiButton>
+          </div>
+        </>
+      ) : null}
+      {state === "connected" ? (
+        <div className="mt-3">
+          <SuccessPop label={t`Connected — its tools are available from your next message.`} />
+        </div>
+      ) : null}
+      {state === "dismissed" ? (
+        <p className="mt-2 text-[13px] text-[#85858A]">
+          <Trans>Dismissed — reconnect anytime from MCP settings.</Trans>
+        </p>
+      ) : null}
+    </BuiCard>
+  );
+}
+
+function ChartBlockView({
+  name,
+  spec,
+  data,
+}: {
+  name: string;
+  spec: Record<string, unknown>;
+  data: unknown[];
+}) {
+  const { t } = useLingui();
+  const [expanded, setExpanded] = useState(false);
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+  useEffect(() => {
+    if (!expanded) return;
+    setViewport({ width: window.innerWidth, height: window.innerHeight });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [expanded]);
+  const expandedViewport = chartViewport(viewport.width, viewport.height);
+  return (
+    <>
+      <div className="group relative max-w-[74%] rounded-[20px] bg-[#17171A] p-4">
+        <ChartCanvas spec={spec} data={data} width={520} />
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="absolute end-3 top-3 rounded-lg border border-[#34343B] bg-[#1F1F22] px-2.5 py-1 text-[11px] text-[#B9B9C0] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A6A6AD]"
+        >
+          <Trans>Expand</Trans>
+        </button>
+      </div>
+      {expanded ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(4,4,5,.78)] p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label={name}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setExpanded(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setExpanded(false);
+          }}
+        >
+          <div className="max-h-[92vh] w-[min(1320px,94vw)] overflow-auto rounded-[24px] border border-[#2A2A31] bg-[#141416] p-8 shadow-[0_40px_90px_rgba(0,0,0,.6)]">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-[13px] text-[#85858A]">{name}</span>
+              <button
+                type="button"
+                aria-label={t`Close chart`}
+                onClick={() => setExpanded(false)}
+                className="text-lg text-[#85858A] hover:text-[#DFDFE2]"
+              >
+                ✕
+              </button>
+            </div>
+            <ChartCanvas
+              spec={spec}
+              data={data}
+              width={expandedViewport.width}
+              height={expandedViewport.height}
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function ArtifactImage({
-  botId,
+  target,
   artifactId,
   name,
 }: {
-  botId: string;
+  target: ArtifactTarget;
   artifactId: string;
   name: string;
 }) {
+  const { t } = useLingui();
   const [src, setSrc] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [visible, setVisible] = useState(false);
   const container = useRef<HTMLDivElement>(null);
+  const targetBotId = "botId" in target ? target.botId : undefined;
+  const targetGroupId = "groupId" in target ? target.groupId : undefined;
 
   useEffect(() => {
     const element = container.current;
@@ -3035,7 +5919,11 @@ function ArtifactImage({
     let objectUrl: string | null = null;
     setSrc(null);
     void rpc.artifacts
-      .get({ botId, artifactId })
+      .get(
+        targetBotId
+          ? { botId: targetBotId, artifactId }
+          : { groupId: targetGroupId ?? "", artifactId },
+      )
       .then((artifact) => {
         const bytes = decodeArtifactBase64(artifact.contentBase64);
         objectUrl = URL.createObjectURL(
@@ -3049,7 +5937,7 @@ function ArtifactImage({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifactId, botId, visible]);
+  }, [artifactId, targetBotId, targetGroupId, visible]);
 
   return (
     <div ref={container}>
@@ -3069,7 +5957,7 @@ function ArtifactImage({
       {open && src ? (
         <button
           type="button"
-          aria-label="Close image preview"
+          aria-label={t`Close image preview`}
           className="fixed inset-0 z-50 grid place-items-center bg-[rgba(4,4,5,.82)] p-6"
           onClick={() => setOpen(false)}
         >
@@ -3095,10 +5983,4 @@ function readFileAsBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
-}
-
-function formatBytes(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

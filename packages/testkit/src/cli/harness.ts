@@ -12,9 +12,11 @@ const e2e = process.argv.includes("--e2e");
 const sandboxArg = process.argv.find((arg) => arg.startsWith("--sandbox="));
 const specArg = process.argv.find((arg) => arg.startsWith("--spec="));
 const grepArg = process.argv.find((arg) => arg.startsWith("--grep="));
+const runtimeArg = process.argv.find((arg) => arg.startsWith("--runtime="));
 const sandboxProvider = sandboxArg?.slice("--sandbox=".length) ?? "fake";
 const e2eSpec = specArg?.slice("--spec=".length);
 const e2eGrep = grepArg?.slice("--grep=".length);
+const agentRuntime = runtimeArg?.slice("--runtime=".length) ?? "scripted";
 
 if (Number(integration) + Number(e2e) !== 1) {
   throw new Error("Pass exactly one of --integration or --e2e");
@@ -24,6 +26,9 @@ if (!["fake", "e2b", "daytona", "box"].includes(sandboxProvider)) {
 }
 if (integration && sandboxProvider !== "fake") {
   throw new Error("Integration tests only support the fake sandbox");
+}
+if (agentRuntime !== "pi" && agentRuntime !== "scripted") {
+  throw new Error('Runtime must be "pi" or "scripted"');
 }
 if (sandboxProvider === "e2b" && !process.env.E2B_API_KEY) {
   throw new Error("E2B_API_KEY is required when --sandbox=e2b");
@@ -50,10 +55,12 @@ async function main() {
     process.env.VERIFY_DATABASE = "1";
     process.env.WAKEUP_DRIVER = "memory";
     process.env.SANDBOX_PROVIDER = sandboxProvider;
-    process.env.AGENT_RUNTIME = "scripted";
+    process.env.AGENT_RUNTIME = agentRuntime;
     process.env.COMPOSIO_API_KEY = "";
     process.env.BETTER_AUTH_SECRET = "test-secret-test-secret-32chars!";
     process.env.ENCRYPTION_KEY = "test-encryption-key-test-encryption-key";
+    process.env.SANDBOX_SUPERVISOR_TOKEN = "test-supervisor-token-test-32chars";
+    process.env.SCREEN_PROXY_SECRET = "test-screen-proxy-secret-test-32chars";
     process.env.BETTER_AUTH_URL = webOrigin;
     process.env.WEB_ORIGIN = webOrigin;
     process.env.API_PORT = String(apiPort);
@@ -63,6 +70,7 @@ async function main() {
     process.env.PLAYWRIGHT_BASE_URL = webOrigin;
     process.env.DATA_DIR = path.join(reportDir, "data");
     process.env.SIGNUPS_ENABLED = "true";
+    process.env.SIGNUP_ALLOWLIST = "";
     process.env.CI = "1";
 
     execSync("pnpm --filter @rakazo/db generate", { stdio: "inherit", env: process.env });
@@ -101,15 +109,29 @@ async function main() {
       return;
     }
 
-    const [{ ComposioEmulator }, { createApp }] = await Promise.all([
-      import("@rakazo/adapters"),
-      import("../../../../apps/api/src/app.ts"),
-    ]);
+    const [{ ComposioEmulator, PipedreamConnector, ThirdPartyConnectorEmulator }, { createApp }] =
+      await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
     const { serve } = await import("@hono/node-server");
+    const thirdParties = new ThirdPartyConnectorEmulator();
+    const pipedream = new PipedreamConnector(
+      {
+        clientId: "fake-client-id",
+        clientSecret: "fake-client-secret",
+        projectId: "fake-project-id",
+        environment: "development",
+        identitySecret: process.env.ENCRYPTION_KEY,
+      },
+      { fetch: thirdParties.fetch, resolveHostname: thirdParties.resolveHostname },
+    );
     const handles = await createApp({
       databaseUrl,
       prisma: undefined,
       composio: new ComposioEmulator(),
+      pipedream,
+      remoteConnectors: {
+        fetch: thirdParties.fetch,
+        resolveHostname: thirdParties.resolveHostname,
+      },
     });
     let activeRequests = 0;
     const requestWaiters = new Set<() => void>();
@@ -147,6 +169,8 @@ async function main() {
           {
             ...process.env,
             CI: "1",
+            // Pin English so e2e selectors match source messages regardless of runner locale.
+            VITE_DEFAULT_UI_LOCALE: "en",
           },
         );
       } catch (error) {

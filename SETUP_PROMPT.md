@@ -1,6 +1,63 @@
 # Set up Rakazo with a coding agent
 
-Copy the prompt below into a coding agent. It sets up the local web app first; Electron is an optional final step.
+Copy one of the prompts below into a coding agent.
+
+## Published images (no checkout)
+
+Prefer this when the user wants a running web UI with Docker only (no Node/pnpm clone).
+
+```text
+Set up Rakazo from published GHCR images and leave the web UI running.
+
+Work like a careful onboarding engineer: perform the setup yourself, explain only decisions or blockers, and verify the product through the UI.
+
+Safety rules:
+
+- Never overwrite an existing `.env`. If one exists, inspect only which keys are present (never print values), preserve it, and ask before changing existing values.
+- Never print, log, commit, or paste secrets into tracked files.
+- Do not kill unrelated processes or containers to free ports. Identify conflicts and ask before stopping anything.
+- Treat model or integration credentials as security-sensitive.
+
+Before making changes, ask me these concise questions:
+
+1. Which directory should contain the Rakazo folder (or use the current directory)?
+2. How should models be connected?
+   - Add a deployment-wide `OPENROUTER_API_KEY` to `.env`.
+   - Connect during Rakazo onboarding with a provider API key or with ChatGPT Plus/Pro, GitHub Copilot, or SuperGrok / X Premium.
+   - Defer model setup and verify infrastructure only. Make clear that bots cannot answer until a model is connected.
+3. Do I want remote computers instead of local Docker? If yes, choose E2B (`E2B_API_KEY`), Daytona (`DAYTONA_API_KEY`), or Box (`BOX_API_KEY`) and set `SANDBOX_PROVIDER` accordingly. If no, keep the default `SANDBOX_PROVIDER=docker` (local computers via the in-stack supervisor).
+
+Do not ask me to invent secrets; generate strong random values with openssl yourself.
+
+Preflight:
+
+- Verify Docker Engine and the Compose plugin are installed and the daemon is running.
+- Check whether `127.0.0.1` ports 3100 and 5173 are available.
+
+Setup:
+
+1. Create the directory if needed and enter it.
+2. Download only these two files (do not clone the repository):
+   - https://raw.githubusercontent.com/elie222/rakazo/main/infra/compose/docker-compose.images.yml
+   - https://raw.githubusercontent.com/elie222/rakazo/main/infra/compose/.env.images.example
+3. If `.env` does not exist, copy `.env.images.example` to `.env`. Generate secrets with openssl into shell variables (including `SANDBOX_SUPERVISOR_TOKEN`), abort if any are empty (`: "${VAR:?}"`), then write them into `.env` with portable `sed -i.bak` (see comments in the example file). Keep `SANDBOX_PROVIDER=docker` unless I chose a remote computer provider. Add only the model key I selected.
+4. Run:
+   `docker compose --env-file .env -f docker-compose.images.yml pull`
+   `docker compose --env-file .env -f docker-compose.images.yml up -d`
+5. Wait until api, web, and supervisor are healthy. Default image tag is `edge` (amd64). Do not pin `latest` unless that tag exists in GHCR.
+
+Verification:
+
+- Request `http://127.0.0.1:3100/health`. Require `ok: true` and `sandbox: "docker"` (or the remote provider you configured). A missing `SANDBOX_SUPERVISOR_TOKEN` is a setup failure: Compose will not start the supervisor; restore the token and recreate the stack. Do not treat `sandbox: "none"` as success for this path.
+- Open `http://127.0.0.1:5173`, create a local test account with fake data, and complete first-run onboarding.
+- If a model is connected, send a harmless test message. Open the Agent computer pane and confirm the Docker computer reaches `running` and renders its desktop.
+
+When finished, report the directory path, effective Docker/Compose versions, configured options without secrets, app URL, health result, and how to stop without deleting volumes (`docker compose … down` without `-v`).
+```
+
+## Local source checkout (pnpm)
+
+Use this for development, Docker sandboxes on the host, or Electron.
 
 ```text
 Set up Rakazo locally and leave it running in a usable state.
@@ -24,7 +81,7 @@ Before making changes, ask me these concise questions:
    - Add a deployment-wide `OPENROUTER_API_KEY` to `.env`.
    - Connect during Rakazo onboarding with a provider API key or with ChatGPT Plus/Pro, GitHub Copilot, or SuperGrok / X Premium.
    - Defer model setup and verify infrastructure only. Make clear that bots cannot answer until a model is connected.
-3. Do I want live app plugins? If yes, arrange for `COMPOSIO_API_KEY`; otherwise leave it empty. Explain that this is optional.
+3. Do I want a managed app catalog? If yes, choose Composio (`COMPOSIO_API_KEY`) or Pipedream Connect (`PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET`, and `PIPEDREAM_PROJECT_ID`); otherwise leave them empty. Explain that this is optional and that users can still add Treg, HTTPS MCP, or OpenAPI sources in the app.
 4. Set up the web app only (recommended), or also launch the Electron desktop shell after the web stack works?
 
 Do not ask me to invent `BETTER_AUTH_SECRET` or `ENCRYPTION_KEY`; generate strong random local values yourself. If I choose an API key, let me enter it through an available secure secret mechanism or directly into `.env`; never echo it back. OAuth or device-code sign-in must remain under my control.
@@ -40,7 +97,7 @@ Setup:
 
 1. Clone the repository if needed and enter its root.
 2. Read `AGENTS.md`, `README.md`, `.env.example`, and the root `package.json` before acting. Follow repository instructions if they have changed since this prompt was written.
-3. If `.env` does not exist, copy `.env.example` to `.env`. Generate independent random values of at least 32 bytes for `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY`. Keep local defaults for Postgres, origins, Pi, Docker, and Graphile unless the preflight found a conflict. Add only the model and Composio credentials I selected. Leave optional credentials blank.
+3. If `.env` does not exist, copy `.env.example` to `.env`. Generate independent random values of at least 32 bytes for `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY`. Keep local defaults for Postgres, origins, Pi, Docker, and Graphile unless the preflight found a conflict. Add only the model and managed-connector credentials I selected. Leave optional credentials blank.
 4. Confirm `.env` is ignored and that no secret-bearing file is staged.
 5. Start only local Postgres:
 
@@ -59,12 +116,12 @@ Setup:
 
 Verification:
 
-- Request `http://127.0.0.1:3100/health`. Require `ok: true`, `runtime: "pi"`, `sandbox: "docker"`, `jobs: "graphile"`, and `realtime: "postgres"`. Expect `composio: true` only when its key was configured. `revision` is `null` unless `GIT_SHA` is set.
+- Request `http://127.0.0.1:3100/health`. Require `ok: true`, `runtime: "pi"`, `sandbox: "docker"`, `jobs: "graphile"`, and `realtime: "postgres"`. Expect `composio: true` only when its key was configured and `pipedream: true` only when all Pipedream settings were configured. `revision` is `null` unless `GIT_SHA` is set.
 - Open `http://127.0.0.1:5173` in a browser. If browser automation is available, use it for non-sensitive steps; otherwise give me the exact UI steps.
 - Create a local test account with clearly fake data, complete first-run onboarding, and create a test bot. Do not use personal data.
 - If a model is connected, send a harmless test message and confirm the bot replies. If model setup was deferred, explicitly report that the stack is healthy but a first message will fail until a provider is configured; do not call the setup fully usable without that caveat.
 - Open the Agent computer pane and confirm the Docker computer reaches `running` and renders its desktop.
-- If Composio was not configured, confirm Plugins explains that it is not configured. If it was configured, verify the Plugins view loads without exposing the key.
+- Open Integrations. If neither managed catalog was configured, confirm the view still offers Treg, HTTPS MCP, and OpenAPI sources. If one was configured, verify its app catalog loads without exposing any key or client secret.
 - Run `pnpm test` and `pnpm check`. Report failures with the relevant output; do not claim success if either fails.
 - If I requested Electron, leave the web stack running and then launch `pnpm --filter @rakazo/desktop dev`. Verify the shell loads the same app. Let me make the Docker-versus-This-Mac choice because This Mac grants bots access under my OS account.
 

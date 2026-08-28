@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Model picker includes Grok 4.6 (xAI) and Ox Alpha Free / GLM-5.3 (OpenCode Go).
+
 ### Added
 
 - Voice mode: speak replies, hold-to-talk dictation, and half-duplex calls. Speech sits behind a `VoiceProvider` interface (ElevenLabs, OpenAI, Cartesia) so the product is not tied to one vendor. Keys stay on the server.
@@ -14,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Spawn peer bots (each with its own thread and computer) and short-lived in-thread subagents.
 - ChatGPT Plus or Pro sign-in for model access.
 - Mobile: point the app at a self-hosted API origin, a native iOS inbox, and take control of the live desktop.
+- Provider-neutral integrations: managed apps through Composio or Pipedream Connect, plus encrypted user-installed Treg, HTTPS MCP, and OpenAPI tool sources on web and mobile.
 - Revoke for connected Composio plugins.
 - Routines in plain language instead of raw cron.
 

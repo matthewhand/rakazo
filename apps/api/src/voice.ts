@@ -85,7 +85,7 @@ export async function loadVoiceCredential(deps: VoiceDeps, actor: Actor, provide
     where: { id: cred.secretId, userId: actor.userId, workspaceId: actor.workspaceId },
   });
   if (!secret) return null;
-  return { cred, apiKey: deps.secrets.load(secret.ciphertext) };
+  return { cred, apiKey: deps.secrets.load(secret.ciphertext, secret.id) };
 }
 
 export async function resolveVoiceTarget(
@@ -278,7 +278,9 @@ export function mountVoiceHttpRoutes(
           ) as AbortSignal[],
         ),
       });
-      return new Response(clip.bytes, {
+      // Copy into a fresh ArrayBuffer-backed view: DOM-lib BodyInit rejects
+      // Uint8Array<ArrayBufferLike> since TS 5.7.
+      return new Response(new Uint8Array(clip.bytes), {
         headers: {
           "content-type": clip.mimeType,
           "cache-control": "no-store",

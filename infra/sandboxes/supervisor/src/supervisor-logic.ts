@@ -46,6 +46,97 @@ export function hasValidBearerToken(authorization: string | undefined, expectedT
   return actual.length === candidate.length && timingSafeEqual(actual, candidate);
 }
 
+/** Prefer the HTTP control fast path; on failure use the docker-exec fallback. */
+export async function preferComputerControl<T>(
+  run: (() => Promise<T>) | undefined,
+  fallback: () => Promise<T>,
+): Promise<T> {
+  if (!run) return fallback();
+  try {
+    return await run();
+  } catch {
+    return fallback();
+  }
+}
+
+export class ComputerControlUnavailableError extends Error {
+  constructor(message = "computer control unavailable") {
+    super(message);
+    this.name = "ComputerControlUnavailableError";
+  }
+}
+
+function errorText(error: unknown) {
+  if (!(error instanceof Error)) return String(error).toLowerCase();
+  const cause = error.cause instanceof Error ? ` ${error.cause.message}` : "";
+  return `${error.message}${cause}`.toLowerCase();
+}
+
+/** True when the control service was never reached, so actions were not applied. */
+export function isComputerControlUnavailable(error: unknown) {
+  if (error instanceof ComputerControlUnavailableError) return true;
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TimeoutError" || error.name === "AbortError") return false;
+  const text = errorText(error);
+  // Only pre-connect failures prove no actions ran. Mid-flight resets/hang-ups can
+  // happen after the service already applied steps.
+  return (
+    text.includes("econnrefused") ||
+    text.includes("enotfound") ||
+    text.includes("ehostunreach") ||
+    text.includes("enetunreach") ||
+    text.includes("eai_again")
+  );
+}
+
+export type ComputerControlAttempt<T> =
+  | { status: "ok"; value: T }
+  | { status: "unavailable" }
+  | { status: "failed"; error: Error };
+
+/**
+ * Try the HTTP control fast path.
+ * `unavailable` means the service was never reached (safe to fall back for actions).
+ * `failed` means the request may have partially applied actions (do not replay).
+ */
+export async function attemptComputerControl<T>(
+  run: (() => Promise<T>) | undefined,
+): Promise<ComputerControlAttempt<T>> {
+  if (!run) return { status: "unavailable" };
+  try {
+    return { status: "ok", value: await run() };
+  } catch (error) {
+    if (isComputerControlUnavailable(error)) return { status: "unavailable" };
+    return {
+      status: "failed",
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
+
+/** Replay actions via docker-exec only when control was never reached. */
+export function shouldReplayComputerActions(attempt: ComputerControlAttempt<unknown>) {
+  return attempt.status === "unavailable";
+}
+
+const CONTROL_BASE_TIMEOUT_MS = 15_000;
+const CONTROL_MAX_TIMEOUT_MS = 60_000;
+
+/** Bound the HTTP control deadline by mapped waits and settle time. */
+export function computerControlTimeoutMs(
+  actions: Array<z.infer<typeof computerActionSchema>>,
+  settleMs = 0,
+) {
+  let waits = 0;
+  for (const action of actions) {
+    if (action.kind === "wait") waits += Math.min(Math.max(action.ms, 0), 5_000);
+  }
+  return Math.min(
+    CONTROL_MAX_TIMEOUT_MS,
+    CONTROL_BASE_TIMEOUT_MS + waits + Math.min(Math.max(settleMs, 0), 5_000),
+  );
+}
+
 export function toSandboxInput(input: {
   kind: "key" | "pointer" | "clipboard";
   key?: string;
@@ -177,7 +268,7 @@ export function ensureScreenCommand(index: number) {
     `if [ -d /home/rakazo/.browser-profiles/chromium ]; then cp -a /home/rakazo/.browser-profiles/chromium/. ${profile}/; rm -f ${profile}/SingletonLock ${profile}/SingletonCookie ${profile}/SingletonSocket; fi`,
     `DISPLAY=${layout.display} HOME=/home/rakazo rakazo-browser --user-data-dir=${profile} >${log}-browser.log 2>&1 &`,
     `x11vnc -display ${layout.display} -forever -shared -viewonly -nopw -listen 127.0.0.1 -rfbport ${layout.viewVncPort} -xkb -ncache 0 >${log}-x11vnc.log 2>&1 &`,
-    `websockify --web=/usr/share/novnc 0.0.0.0:${layout.viewPort} 127.0.0.1:${layout.viewVncPort} >${log}-novnc.log 2>&1 &`,
+    `websockify --heartbeat=30 --web=/usr/share/novnc 0.0.0.0:${layout.viewPort} 127.0.0.1:${layout.viewVncPort} >${log}-novnc.log 2>&1 &`,
     `for i in $(seq 1 50); do (echo >/dev/tcp/127.0.0.1/${layout.viewPort}) >/dev/null 2>&1 && exit 0; sleep 0.1; done`,
     "exit 1",
   ].join("\n");
@@ -268,7 +359,7 @@ export function interactiveScreenCommand(
     `printf %s ${shellQuote(controlToken)} > ${tokenFile}`,
     `export DISPLAY=${layout.display}`,
     `(x11vnc -display ${layout.display} -forever -shared -nopw -listen 127.0.0.1 -rfbport ${layout.controlVncPort} -xkb -ncache 0 >/tmp/rakazo/x11vnc-control-${layout.displayNumber}.log 2>&1 &)`,
-    `(websockify --web=/usr/share/novnc 0.0.0.0:${layout.controlPort} 127.0.0.1:${layout.controlVncPort} >/tmp/rakazo/novnc-control-${layout.displayNumber}.log 2>&1 &)`,
+    `(websockify --heartbeat=30 --web=/usr/share/novnc 0.0.0.0:${layout.controlPort} 127.0.0.1:${layout.controlVncPort} >/tmp/rakazo/novnc-control-${layout.displayNumber}.log 2>&1 &)`,
     `for i in $(seq 1 50); do (echo >/dev/tcp/127.0.0.1/${layout.controlPort}) >/dev/null 2>&1 && exit 0; sleep 0.1; done`,
     "exit 1",
   ].join("; ");
