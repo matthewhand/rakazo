@@ -64,6 +64,27 @@ pnpm dev
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173), create an account, connect a model, and create
 your first bot.
 
+The API runs at [http://127.0.0.1:3100](http://127.0.0.1:3100). You can verify backend health with `GET /health`:
+
+```bash
+curl http://127.0.0.1:3100/health
+```
+
+Expected response shape:
+
+```json
+{
+  "ok": true,
+  "runtime": "pi",
+  "sandbox": "docker",
+  "composio": false,
+  "mcp": false,
+  "jobs": "graphile",
+  "realtime": "postgres",
+  "revision": null
+}
+```
+
 For an agent-assisted installation, use [SETUP_PROMPT.md](./SETUP_PROMPT.md). For deployment,
 provider selection, backups, and upgrades, see the [self-hosting guide](./docs/self-host.md).
 
