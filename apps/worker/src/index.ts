@@ -19,10 +19,10 @@ import {
   LocalAgentHomeStore,
   LocalArtifactStore,
   McpClient,
-  parseMcpConfig,
-  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PostgresRealtimeFanout,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   ScriptedAgentRuntime,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey } from "@rakazo/core";
@@ -57,7 +57,7 @@ async function main() {
     MCP_SERVERS: process.env.MCP_SERVERS,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {

@@ -1,13 +1,13 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import type { AdapterContext } from "@rakazo/adapter-kit";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  isMcpEnabled,
   McpClient,
+  type McpClientConfig,
   parseMcpConfig,
   parseMcpConfigFromEnv,
-  isMcpEnabled,
-  type McpClientConfig,
 } from "./mcp-client.js";
 import { McpEmulator } from "./mcp-emulator.js";
-import type { AdapterContext } from "@rakazo/adapter-kit";
 
 describe("McpClient", () => {
   let emulator: McpEmulator;
@@ -191,9 +191,7 @@ describe("parseMcpConfig", () => {
     const mockPrisma = {
       deploymentSettings: {
         findUnique: async () => ({
-          mcpServers: JSON.stringify([
-            { name: "db-server", type: "http", url: "http://db:3000" },
-          ]),
+          mcpServers: JSON.stringify([{ name: "db-server", type: "http", url: "http://db:3000" }]),
         }),
       },
     };
@@ -224,18 +222,14 @@ describe("parseMcpConfig", () => {
     const mockPrisma = {
       deploymentSettings: {
         findUnique: async () => ({
-          mcpServers: JSON.stringify([
-            { name: "db-server", type: "http", url: "http://db:3000" },
-          ]),
+          mcpServers: JSON.stringify([{ name: "db-server", type: "http", url: "http://db:3000" }]),
         }),
       },
     };
 
     const config = await parseMcpConfig(
       {
-        MCP_SERVERS: JSON.stringify([
-          { name: "env-server", type: "http", url: "http://env:3000" },
-        ]),
+        MCP_SERVERS: JSON.stringify([{ name: "env-server", type: "http", url: "http://env:3000" }]),
       },
       mockPrisma as never,
     );

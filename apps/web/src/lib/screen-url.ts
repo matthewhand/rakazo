@@ -35,8 +35,10 @@ export function embeddableScreenUrl(url: string | null, pageHref?: string): stri
 export function screenIframeSandbox(url: string | null) {
   if (!url) return undefined;
   try {
-    return new URL(url, typeof window !== "undefined" ? window.location.href : undefined)
-      .pathname.startsWith("/novnc/")
+    return new URL(
+      url,
+      typeof window !== "undefined" ? window.location.href : undefined,
+    ).pathname.startsWith("/novnc/")
       ? "allow-scripts allow-pointer-lock"
       : undefined;
   } catch {

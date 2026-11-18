@@ -1,5 +1,5 @@
-import type { MessageBlock } from "@rakazo/contracts";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
+import type { MessageBlock } from "@rakazo/contracts";
 import { useEffect, useState } from "react";
 
 type CommsBlock = Extract<MessageBlock, { kind: "subagent" | "child_bot" | "tool" }>;
@@ -78,6 +78,7 @@ function AgentCommsPopup({
   }, [onClose]);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Escape and the close button dismiss the dialog from the keyboard.
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4"
       role="presentation"
@@ -93,7 +94,9 @@ function AgentCommsPopup({
       >
         <div className="flex items-start justify-between gap-4 border-b border-[#1C1C1E] px-5 py-4">
           <div className="min-w-0">
-            <div className="truncate text-[16px] font-medium text-[#F1F1F2]">{commsTitle(block)}</div>
+            <div className="truncate text-[16px] font-medium text-[#F1F1F2]">
+              {commsTitle(block)}
+            </div>
             <div className="mt-1 text-[13px] text-[#85858A]">{commsKindLabel(block)}</div>
           </div>
           <button type="button" aria-label="Close" onClick={onClose} className="text-[#85858A]">
