@@ -40,4 +40,7 @@ def extract(archive_path: str, destination: str) -> None:
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         raise SystemExit("Usage: extract-playwright-artifacts <archive> <destination>")
-    extract(sys.argv[1], sys.argv[2])
+    try:
+        extract(sys.argv[1], sys.argv[2])
+    except FileExistsError as error:
+        raise SystemExit(f"Playwright artifact output path already exists: {error.filename}") from error
