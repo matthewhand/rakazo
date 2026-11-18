@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Public forks can run the checks without a configured screenshot bucket.
+if [[ -z "${AWS_ACCESS_KEY_ID:-}" && -z "${AWS_SECRET_ACCESS_KEY:-}" &&
+      -z "${S3_BUCKET:-}" && -z "${S3_ENDPOINT:-}" &&
+      -z "${PLAYWRIGHT_PUBLIC_BASE_URL:-}" ]]; then
+  echo "Playwright visual report storage is unconfigured. Skipping publication."
+  exit 0
+fi
+
 : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
 : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
 : "${S3_BUCKET:?S3_BUCKET is required}"

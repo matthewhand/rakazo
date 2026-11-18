@@ -40,7 +40,9 @@ export function McpServersTab({
     }
   }
 
-  async function saveServers(next: Array<McpServerPublic | Parameters<typeof rpc.mcp.update>[0]["servers"][number]>) {
+  async function saveServers(
+    next: Array<McpServerPublic | Parameters<typeof rpc.mcp.update>[0]["servers"][number]>,
+  ) {
     setSaving(true);
     setError(null);
     try {
@@ -74,7 +76,9 @@ export function McpServersTab({
 
   async function toggleServer(index: number) {
     await saveServers(
-      servers.map((server, i) => (i === index ? { ...server, disabled: !server.disabled } : server)),
+      servers.map((server, i) =>
+        i === index ? { ...server, disabled: !server.disabled } : server,
+      ),
     );
   }
 
@@ -83,7 +87,9 @@ export function McpServersTab({
     const interval = window.setInterval(() => {
       void rpc.mcp
         .status()
-        .then((result) => setStatuses(new Map(result.servers.map((server) => [server.name, server]))))
+        .then((result) =>
+          setStatuses(new Map(result.servers.map((server) => [server.name, server]))),
+        )
         .catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(interval);
@@ -124,7 +130,9 @@ export function McpServersTab({
       ) : null}
 
       {!canManage ? (
-        <p className="mb-4 text-sm text-[#7A7A80]">Only the deployment owner can add or edit MCP servers.</p>
+        <p className="mb-4 text-sm text-[#7A7A80]">
+          Only the deployment owner can add or edit MCP servers.
+        </p>
       ) : null}
 
       {servers.length === 0 && !loadError ? (
@@ -250,8 +258,7 @@ function ServerCard({
 
 function StatusBadge({ status }: { status: McpServerStatus["status"] }) {
   const label = status === "connected" ? "connected" : status === "disabled" ? "disabled" : "error";
-  const color =
-    status === "connected" ? "#4ECB71" : status === "disabled" ? "#85858A" : "#C94244";
+  const color = status === "connected" ? "#4ECB71" : status === "disabled" ? "#85858A" : "#C94244";
   return (
     <span
       className="rounded-full px-2.5 py-0.5 text-[12px]"
@@ -346,7 +353,9 @@ function McpServerEditor({
   return (
     <form onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
       <div className="mb-6">
-        <h3 className="text-lg font-semibold text-[#F1F1F2]">{server ? "Edit server" : "Add server"}</h3>
+        <h3 className="text-lg font-semibold text-[#F1F1F2]">
+          {server ? "Edit server" : "Add server"}
+        </h3>
         <p className="mt-1 text-sm text-[#7A7A80]">Configure a Model Context Protocol server.</p>
       </div>
       {error ? (

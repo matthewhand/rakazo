@@ -20,11 +20,11 @@ import {
   LocalAgentHomeStore,
   LocalArtifactStore,
   McpClient,
-  parseMcpConfig,
-  parseMcpConfigFromEnv,
   PiAgentRuntime,
   PiOAuthLogins,
   PostgresRealtimeFanout,
+  parseMcpConfig,
+  parseMcpConfigFromEnv,
   pushTokenPath,
   ScriptedAgentRuntime,
 } from "@rakazo/adapters";
@@ -107,7 +107,7 @@ export async function createApp(
     MCP_SERVERS: env.mcpServers,
   };
   const loadMcpConfig = () => parseMcpConfig(envMcp, prisma);
-  let mcpConfig;
+  let mcpConfig: Awaited<ReturnType<typeof loadMcpConfig>>;
   try {
     mcpConfig = await loadMcpConfig();
   } catch {
