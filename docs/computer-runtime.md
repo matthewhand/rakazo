@@ -1,5 +1,9 @@
 # Computer runtime
 
+For **local** Docker and host/desktop operate (entry points, SPA, permissions, agent tools),
+see [local-computer-control.md](./local-computer-control.md). This page is the shared
+provider contract, including SaaS backends.
+
 Rakazo keeps the agent runtime and the computer runtime separate:
 
 ```text
