@@ -38,6 +38,7 @@
   },
   "pnpm": {
     "overrides": {
+      "@prisma/config>effect": "3.22.1",
       "react": "19.2.3",
       "react-dom": "19.2.3",
       "@grpc/grpc-js@<1.14.5": "1.14.7",
